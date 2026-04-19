@@ -1,3 +1,38 @@
+/* ═══════════════════════════════════════════════════════════════════
+   ONNX Runtime setup
+   ═══════════════════════════════════════════════════════════════════ */
+
+ort.env.wasm.numThreads = 1;
+
+const ORT_BASE = "./onnx/";
+let S = {}; // ONNX sessions
+
+function scalar(v) {
+	return new ort.Tensor("float32", Float32Array.from([v]), []);
+}
+function val(t) {
+	return t.data[0];
+}
+
+async function loadONNX() {
+	const names = [
+		"clamp",
+		"lerp",
+		"shock",
+		"ai",
+		"physics",
+		"cutscene",
+		"particles"
+	];
+	for (const n of names) {
+		S[n] = await ort.InferenceSession.create(ORT_BASE + "pong_" + n + ".onnx");
+	}
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DOM references
+   ═══════════════════════════════════════════════════════════════════ */
+
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d", { alpha: true });
 
@@ -11,7 +46,7 @@ const btnPause = document.getElementById("btnPause");
 const btnSound = document.getElementById("btnSound");
 const btnFX = document.getElementById("btnFX");
 
-const cutscene = document.getElementById("cutscene");
+const cutsceneEl = document.getElementById("cutscene");
 const cutText = document.getElementById("cutText");
 const cutSub = document.getElementById("cutSub");
 
@@ -21,29 +56,13 @@ const sR = document.getElementById("sR");
 const INTRO_IMG = "./assets/codepong-title.png";
 const END_IMG = "./assets/codepong26.png";
 
+/* ═══════════════════════════════════════════════════════════════════
+   State / constants
+   ═══════════════════════════════════════════════════════════════════ */
+
 let W = 0,
 	H = 0;
 let DPR = 1;
-
-function resize() {
-	const rect = canvas.getBoundingClientRect();
-	W = Math.floor(rect.width);
-	H = Math.floor(rect.height);
-	canvas.width = W * DPR;
-	canvas.height = H * DPR;
-	ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-}
-window.addEventListener("resize", resize);
-
-function rand(a, b) {
-	return a + Math.random() * (b - a);
-}
-function clamp(v, a, b) {
-	return Math.max(a, Math.min(b, v));
-}
-function lerp(a, b, t) {
-	return a + (b - a) * t;
-}
 
 const state = {
 	running: false,
@@ -65,14 +84,126 @@ const ai = { w: 14, h: 110, inset: 26, y: 0, vy: 0, memoryY: 0 };
 const ball = { r: 10, x: 0, y: 0, vx: 0, vy: 0, speed: 560 };
 
 const trail = [];
-const particles = [];
-const sparks = [];
 
-const PERF = {
-	maxTrail: 16,
-	maxParticles: 70,
-	maxSparks: 40
-};
+const MAX_P = 70;
+const MAX_S = 40;
+const particleBuf = new Float32Array(MAX_P * 7); // [x,y,vx,vy,life,t,alive]
+const sparkBuf = new Float32Array(MAX_S * 7);
+
+const PERF = { maxTrail: 16 };
+
+/* ═══════════════════════════════════════════════════════════════════
+   Helpers — rand stays in JS (Math.random)
+   ═══════════════════════════════════════════════════════════════════ */
+
+function rand(a, b) {
+	return a + Math.random() * (b - a);
+}
+
+function resize() {
+	const rect = canvas.getBoundingClientRect();
+	W = Math.floor(rect.width);
+	H = Math.floor(rect.height);
+	canvas.width = W * DPR;
+	canvas.height = H * DPR;
+	ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize);
+
+/* ═══════════════════════════════════════════════════════════════════
+   ONNX wrapper functions
+   ═══════════════════════════════════════════════════════════════════ */
+
+async function clamp(v, a, b) {
+	const r = await S.clamp.run({ v: scalar(v), a: scalar(a), b: scalar(b) });
+	return val(r.result);
+}
+
+async function lerp(a, b, t) {
+	const r = await S.lerp.run({ a: scalar(a), b: scalar(b), t: scalar(t) });
+	return val(r.result);
+}
+
+async function onnxShock(amount) {
+	const r = await S.shock.run({
+		shake: scalar(state.shake),
+		amount: scalar(amount)
+	});
+	state.shake = val(r.new_shake);
+}
+
+async function onnxAiUpdate(dt) {
+	const r = await S.ai.run({
+		ball_y: scalar(ball.y),
+		ball_vy: scalar(ball.vy),
+		ball_vx: scalar(ball.vx),
+		ai_y: scalar(ai.y),
+		ai_memoryY: scalar(ai.memoryY),
+		score_L: scalar(score.L),
+		score_R: scalar(score.R),
+		dt: scalar(dt),
+		H: scalar(H),
+		rand_val: scalar(Math.random() * 2 - 1)
+	});
+	ai.y = val(r.new_ai_y);
+	ai.memoryY = val(r.new_ai_memoryY);
+	ai.vy = val(r.ai_vy);
+	ai.h = val(r.ai_h);
+}
+
+async function onnxPhysics(dt) {
+	const r = await S.physics.run({
+		ball_x: scalar(ball.x),
+		ball_y: scalar(ball.y),
+		ball_vx: scalar(ball.vx),
+		ball_vy: scalar(ball.vy),
+		paddle_y: scalar(paddle.y),
+		paddle_target_y: scalar(paddle.targetY),
+		paddle_h: scalar(paddle.h),
+		ai_y: scalar(ai.y),
+		ai_h: scalar(ai.h),
+		score_L: scalar(score.L),
+		score_R: scalar(score.R),
+		rally: scalar(rally),
+		dt: scalar(dt),
+		W: scalar(W),
+		H: scalar(H)
+	});
+	ball.x = val(r.new_ball_x);
+	ball.y = val(r.new_ball_y);
+	ball.vx = val(r.new_ball_vx);
+	ball.vy = val(r.new_ball_vy);
+	paddle.y = val(r.new_paddle_y);
+	rally = val(r.new_rally);
+	return r.events.data; // Float32Array[6]
+}
+
+async function onnxCutscene(dt) {
+	const r = await S.cutscene.run({
+		cut: scalar(state.cut ? 1.0 : 0.0),
+		cutT: scalar(state.cutT),
+		slowmo: scalar(state.slowmo),
+		dt: scalar(dt)
+	});
+	state.cut = val(r.new_cut) > 0.5;
+	state.cutT = val(r.new_cutT);
+	state.slowmo = val(r.new_slowmo);
+	return val(r.cut_ended) > 0.5;
+}
+
+async function onnxParticles(dt) {
+	const r = await S.particles.run({
+		particles: new ort.Tensor("float32", new Float32Array(particleBuf), [MAX_P, 7]),
+		sparks: new ort.Tensor("float32", new Float32Array(sparkBuf), [MAX_S, 7]),
+		dt: scalar(dt)
+	});
+	particleBuf.set(r.new_particles.data);
+	sparkBuf.set(r.new_sparks.data);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UI helpers
+   ═══════════════════════════════════════════════════════════════════ */
 
 function setPressed(el, on) {
 	el.setAttribute("aria-pressed", on ? "true" : "false");
@@ -110,60 +241,13 @@ function setFXIcon() {
 
 function setPauseIcon() {
 	const i = btnPause.querySelector("i");
-	if (i) i.className = state.paused ? "fa-solid fa-play" : "fa-solid fa-pause";
+	if (i)
+		i.className = state.paused ? "fa-solid fa-play" : "fa-solid fa-pause";
 }
 
-btnPlay.addEventListener("click", start);
-
-if (btnHow) {
-	btnHow.addEventListener("click", () => {
-		const t = document.getElementById("tiny");
-		if (t) t.textContent = "HOW: HIT EDGES FOR ANGLE. SPACE PAUSES. R RESTARTS.";
-	});
-}
-
-btnPause.addEventListener("click", togglePause);
-btnSound.addEventListener("click", toggleSound);
-btnFX.addEventListener("click", toggleFX);
-
-overlay.addEventListener("click", (e) => {
-	if (e.target.closest("button")) return;
-	if (!state.running) start();
-});
-
-function togglePause() {
-	if (!state.running) return;
-
-	state.paused = !state.paused;
-	setPressed(btnPause, state.paused);
-
-	if (state.paused) {
-		overlayImg.src =
-			"./assets/codepong26.png";
-		showOverlay("PAUSED", "PRESS START OR SPACE TO CONTINUE");
-	} else {
-		overlayImg.src = INTRO_IMG;
-		hideOverlay();
-	}
-}
-
-function toggleSound() {
-	state.sound = !state.sound;
-	setPressed(btnSound, state.sound);
-	setSoundIcon();
-	if (state.sound) beep("start");
-}
-
-function toggleFX() {
-	state.fx = !state.fx;
-	setPressed(btnFX, state.fx);
-	setFXIcon();
-	if (!state.fx) {
-		trail.length = 0;
-		particles.length = 0;
-		sparks.length = 0;
-	}
-}
+/* ═══════════════════════════════════════════════════════════════════
+   Audio (Web Audio API — stays in JS)
+   ═══════════════════════════════════════════════════════════════════ */
 
 let AC = null,
 	master = null;
@@ -205,12 +289,16 @@ function beep(kind) {
 	}
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Input (DOM events — stays in JS)
+   ═══════════════════════════════════════════════════════════════════ */
+
 let pointerActive = false;
 
-function setTargetFromClientY(clientY) {
+async function setTargetFromClientY(clientY) {
 	const rect = canvas.getBoundingClientRect();
 	const y = clientY - rect.top;
-	paddle.targetY = clamp(y, paddle.h / 2 + 8, H - paddle.h / 2 - 8);
+	paddle.targetY = await clamp(y, paddle.h / 2 + 8, H - paddle.h / 2 - 8);
 }
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -250,48 +338,104 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
+/* ═══════════════════════════════════════════════════════════════════
+   Particle buffer management (burst / sparkLine — uses rand, stays JS)
+   ═══════════════════════════════════════════════════════════════════ */
+
+function findSlot(buf, max) {
+	for (let j = 0; j < max; j++) {
+		if (buf[j * 7 + 6] === 0) return j;
+	}
+	return 0; // overwrite oldest if full
+}
+
 function burst(x, y, n) {
 	for (let i = 0; i < n; i++) {
-		particles.push({
-			x,
-			y,
-			vx: rand(-240, 240),
-			vy: rand(-240, 240),
-			life: rand(0.25, 0.7),
-			t: 0
-		});
+		const s = findSlot(particleBuf, MAX_P);
+		const off = s * 7;
+		particleBuf[off] = x;
+		particleBuf[off + 1] = y;
+		particleBuf[off + 2] = rand(-240, 240);
+		particleBuf[off + 3] = rand(-240, 240);
+		particleBuf[off + 4] = rand(0.25, 0.7);
+		particleBuf[off + 5] = 0;
+		particleBuf[off + 6] = 1;
 	}
-	while (particles.length > PERF.maxParticles) particles.shift();
 }
 
 function sparkLine(x, y, vx, vy, n) {
 	for (let i = 0; i < n; i++) {
-		sparks.push({
-			x,
-			y,
-			vx: vx * rand(0.2, 0.7) + rand(-60, 60),
-			vy: vy * rand(0.2, 0.7) + rand(-60, 60),
-			life: rand(0.12, 0.28),
-			t: 0
-		});
+		const s = findSlot(sparkBuf, MAX_S);
+		const off = s * 7;
+		sparkBuf[off] = x;
+		sparkBuf[off + 1] = y;
+		sparkBuf[off + 2] = vx * rand(0.2, 0.7) + rand(-60, 60);
+		sparkBuf[off + 3] = vy * rand(0.2, 0.7) + rand(-60, 60);
+		sparkBuf[off + 4] = rand(0.12, 0.28);
+		sparkBuf[off + 5] = 0;
+		sparkBuf[off + 6] = 1;
 	}
-	while (sparks.length > PERF.maxSparks) sparks.shift();
 }
 
-function shock(a) {
-	state.shake = Math.min(10, state.shake + a);
+/* ═══════════════════════════════════════════════════════════════════
+   UI event handlers
+   ═══════════════════════════════════════════════════════════════════ */
+
+btnPlay.addEventListener("click", () => start());
+
+if (btnHow) {
+	btnHow.addEventListener("click", () => {
+		const t = document.getElementById("tiny");
+		if (t)
+			t.textContent = "HOW: HIT EDGES FOR ANGLE. SPACE PAUSES. R RESTARTS.";
+	});
 }
 
-function levelFromProgress() {
-	const total = score.L + score.R;
-	const maxScore = Math.max(score.L, score.R);
-	let lvl = 0;
-	if (total >= 3) lvl = 1;
-	if (total >= 7) lvl = 2;
-	if (maxScore >= 6) lvl = 3;
-	if (maxScore >= 9) lvl = 4;
-	return lvl;
+btnPause.addEventListener("click", togglePause);
+btnSound.addEventListener("click", toggleSound);
+btnFX.addEventListener("click", toggleFX);
+
+overlay.addEventListener("click", (e) => {
+	if (e.target.closest("button")) return;
+	if (!state.running) start();
+});
+
+function togglePause() {
+	if (!state.running) return;
+
+	state.paused = !state.paused;
+	setPressed(btnPause, state.paused);
+
+	if (state.paused) {
+		overlayImg.src = "./assets/codepong26.png";
+		showOverlay("PAUSED", "PRESS START OR SPACE TO CONTINUE");
+	} else {
+		overlayImg.src = INTRO_IMG;
+		hideOverlay();
+	}
 }
+
+function toggleSound() {
+	state.sound = !state.sound;
+	setPressed(btnSound, state.sound);
+	setSoundIcon();
+	if (state.sound) beep("start");
+}
+
+function toggleFX() {
+	state.fx = !state.fx;
+	setPressed(btnFX, state.fx);
+	setFXIcon();
+	if (!state.fx) {
+		trail.length = 0;
+		particleBuf.fill(0);
+		sparkBuf.fill(0);
+	}
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Match-point cutscene trigger (DOM + condition — stays JS)
+   ═══════════════════════════════════════════════════════════════════ */
 
 function maybeMatchPointCutscene() {
 	if (!state.fx) return;
@@ -311,26 +455,16 @@ function maybeMatchPointCutscene() {
 			? "FINAL POINT"
 			: "MATCH POINT";
 	cutSub.textContent = "SLOW MO";
-	cutscene.classList.add("on");
-	cutscene.setAttribute("aria-hidden", "false");
+	cutsceneEl.classList.add("on");
+	cutsceneEl.setAttribute("aria-hidden", "false");
 }
 
-function updateCutscene(dt) {
-	if (!state.cut) return;
-	state.cutT += dt;
+/* ═══════════════════════════════════════════════════════════════════
+   Game lifecycle (state machine + DOM + rand — stays JS)
+   ═══════════════════════════════════════════════════════════════════ */
 
-	if (state.cutT > 0.9) {
-		state.slowmo = lerp(state.slowmo, 1, 1 - Math.pow(0.0009, dt));
-	}
-	if (state.cutT > 1.35) {
-		state.cut = false;
-		state.slowmo = 1;
-		cutscene.classList.remove("on");
-		cutscene.setAttribute("aria-hidden", "true");
-	}
-}
-
-function resetRound(direction = Math.random() < 0.5 ? -1 : 1) {
+async function resetRound(direction) {
+	if (direction === undefined) direction = Math.random() < 0.5 ? -1 : 1;
 	ball.x = W / 2;
 	ball.y = H / 2;
 
@@ -342,14 +476,14 @@ function resetRound(direction = Math.random() < 0.5 ? -1 : 1) {
 
 	if (state.fx) {
 		burst(ball.x, ball.y, 8);
-		shock(3);
+		await onnxShock(3);
 	}
 	beep("start");
 
 	maybeMatchPointCutscene();
 }
 
-function resetGame() {
+async function resetGame() {
 	score.L = 0;
 	score.R = 0;
 	sL.textContent = "0";
@@ -367,13 +501,13 @@ function resetGame() {
 	ai.memoryY = H / 2;
 
 	trail.length = 0;
-	particles.length = 0;
-	sparks.length = 0;
+	particleBuf.fill(0);
+	sparkBuf.fill(0);
 
-	resetRound();
+	await resetRound();
 }
 
-function start() {
+async function start() {
 	state.running = true;
 	state.paused = false;
 	setPressed(btnPause, false);
@@ -381,10 +515,10 @@ function start() {
 	setIntro(false);
 	hideOverlay();
 	if (playText) playText.textContent = "START";
-	resetGame();
+	await resetGame();
 }
 
-function hardRestart() {
+async function hardRestart() {
 	state.running = true;
 	state.paused = false;
 	setPressed(btnPause, false);
@@ -392,55 +526,44 @@ function hardRestart() {
 	setIntro(false);
 	hideOverlay();
 	if (playText) playText.textContent = "START";
-	resetGame();
+	await resetGame();
 }
 
-function aiUpdate(dt) {
-	const lvl = levelFromProgress();
-
-	const reaction = [0.24, 0.2, 0.16, 0.13, 0.12][lvl];
-	const maxSpeed = [520, 600, 700, 820, 920][lvl];
-	const jitter = [42, 32, 22, 14, 10][lvl];
-
-	ai.h = clamp(118 - lvl * 6, 88, 118);
-
-	const coming = ball.vx > 0;
-	let target = H / 2;
-
-	if (coming) {
-		const lookAhead = [0.1, 0.12, 0.14, 0.16, 0.17][lvl];
-		target = ball.y + ball.vy * lookAhead + rand(-jitter, jitter);
+async function checkWinOrReset(nextDir) {
+	if (score.L >= score.toWin) {
+		endGame(true);
+		return;
 	}
-
-	target = clamp(target, ai.h / 2 + 8, H - ai.h / 2 - 8);
-
-	ai.memoryY = lerp(ai.memoryY, target, 1 - Math.pow(0.0006, dt / reaction));
-
-	const dy = ai.memoryY - ai.y;
-	ai.vy = clamp(dy / reaction, -maxSpeed, maxSpeed);
-	ai.y += ai.vy * dt;
+	if (score.R >= score.toWin) {
+		endGame(false);
+		return;
+	}
+	await resetRound(nextDir);
 }
 
-function updateParticles(dt) {
-	for (let i = particles.length - 1; i >= 0; i--) {
-		const p = particles[i];
-		p.t += dt;
-		p.x += p.vx * dt;
-		p.y += p.vy * dt;
-		p.vx *= Math.pow(0.14, dt);
-		p.vy *= Math.pow(0.14, dt);
-		if (p.t >= p.life) particles.splice(i, 1);
-	}
-	for (let i = sparks.length - 1; i >= 0; i--) {
-		const p = sparks[i];
-		p.t += dt;
-		p.x += p.vx * dt;
-		p.y += p.vy * dt;
-		p.vx *= Math.pow(0.06, dt);
-		p.vy *= Math.pow(0.06, dt);
-		if (p.t >= p.life) sparks.splice(i, 1);
-	}
+function endGame(playerWon) {
+	state.running = true;
+	state.paused = true;
+	setPressed(btnPause, true);
+	setPauseIcon();
+
+	overlayImg.src = END_IMG;
+
+	const title = playerWon ? "YOU WIN" : "AI WINS";
+	const stats = `FINAL SCORE: ${score.L} - ${score.R}`;
+	const msg = playerWon
+		? "NICE WORK. RUN IT BACK AND PUSH FOR A PERFECT GAME."
+		: "CLOSE. YOU CAN BEAT IT. STAY CALM AND USE THE EDGES OF THE PADDLE.";
+
+	showOverlay(title, `${stats}<br><br>${msg}`);
+
+	if (playText) playText.textContent = "PLAY AGAIN";
+	beep("win");
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Rendering (Canvas 2D — stays JS)
+   ═══════════════════════════════════════════════════════════════════ */
 
 function roundRect(x, y, w, h, r) {
 	const rr = Math.min(r, w / 2, h / 2);
@@ -472,8 +595,18 @@ function draw() {
 		ctx.fillRect(0, 0, W, H);
 	};
 	glow(W * 0.22, H * 0.28, 0.1 + 0.02 * Math.sin(t * 0.7), "255,79,216");
-	glow(W * 0.8, H * 0.34, 0.09 + 0.02 * Math.sin(t * 0.8 + 1.2), "0,229,255");
-	glow(W * 0.55, H * 0.86, 0.07 + 0.02 * Math.sin(t * 0.65 + 2.0), "124,92,255");
+	glow(
+		W * 0.8,
+		H * 0.34,
+		0.09 + 0.02 * Math.sin(t * 0.8 + 1.2),
+		"0,229,255"
+	);
+	glow(
+		W * 0.55,
+		H * 0.86,
+		0.07 + 0.02 * Math.sin(t * 0.65 + 2.0),
+		"124,92,255"
+	);
 
 	ctx.globalAlpha = 0.26;
 	ctx.fillStyle = "rgba(255,255,255,0.22)";
@@ -559,30 +692,41 @@ function drawBall(x, y, r) {
 
 function drawParticles() {
 	ctx.fillStyle = "rgba(255,255,255,0.75)";
-	for (const p of particles) {
-		const k = 1 - p.t / p.life;
+	for (let i = 0; i < MAX_P; i++) {
+		const off = i * 7;
+		if (particleBuf[off + 6] === 0) continue;
+		const k = 1 - particleBuf[off + 5] / particleBuf[off + 4];
 		ctx.globalAlpha = 0.7 * k;
-		ctx.fillRect(p.x, p.y, 2, 2);
+		ctx.fillRect(particleBuf[off], particleBuf[off + 1], 2, 2);
 	}
 	ctx.globalAlpha = 1;
 
 	ctx.strokeStyle = "rgba(255,79,216,0.45)";
 	ctx.lineWidth = 2;
 	ctx.lineCap = "round";
-	for (const p of sparks) {
-		const k = 1 - p.t / p.life;
+	for (let i = 0; i < MAX_S; i++) {
+		const off = i * 7;
+		if (sparkBuf[off + 6] === 0) continue;
+		const k = 1 - sparkBuf[off + 5] / sparkBuf[off + 4];
 		ctx.globalAlpha = 0.6 * k;
 		ctx.beginPath();
-		ctx.moveTo(p.x, p.y);
-		ctx.lineTo(p.x - p.vx * 0.02, p.y - p.vy * 0.02);
+		ctx.moveTo(sparkBuf[off], sparkBuf[off + 1]);
+		ctx.lineTo(
+			sparkBuf[off] - sparkBuf[off + 2] * 0.02,
+			sparkBuf[off + 1] - sparkBuf[off + 3] * 0.02
+		);
 		ctx.stroke();
 	}
 	ctx.globalAlpha = 1;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Game loop (async — uses ONNX)
+   ═══════════════════════════════════════════════════════════════════ */
+
 let last = 0;
 
-function update(ts) {
+async function update(ts) {
 	requestAnimationFrame(update);
 	if (!W || !H) return;
 
@@ -590,19 +734,26 @@ function update(ts) {
 	let dt = now - last;
 	last = now;
 
-	dt = Math.min(0.02, Math.max(0.008, dt));
+	// ── dt clamp ← ONNX ──
+	dt = await clamp(dt, 0.008, 0.02);
 	dt *= state.slowmo;
 
 	state.time += dt;
 	state.shake = Math.max(0, state.shake - dt * 22);
 
-	updateCutscene(dt);
+	// ── Cutscene ← ONNX ──
+	const cutEnded = await onnxCutscene(dt);
+	if (cutEnded) {
+		cutsceneEl.classList.remove("on");
+		cutsceneEl.setAttribute("aria-hidden", "true");
+	}
 
+	// ── Keyboard input (clamp ← ONNX) ──
 	let keyDir = 0;
 	if (keys.has("w") || keys.has("arrowup")) keyDir -= 1;
 	if (keys.has("s") || keys.has("arrowdown")) keyDir += 1;
 	if (keyDir) {
-		paddle.targetY = clamp(
+		paddle.targetY = await clamp(
 			paddle.targetY + keyDir * 780 * dt,
 			paddle.h / 2 + 8,
 			H - paddle.h / 2 - 8
@@ -618,14 +769,13 @@ function update(ts) {
 		return;
 	}
 
-	const ease = 1 - Math.pow(0.0009, dt);
-	paddle.y = lerp(paddle.y, paddle.targetY, ease);
+	// ── AI ← ONNX ──
+	await onnxAiUpdate(dt);
 
-	aiUpdate(dt);
+	// ── Physics + collision ← ONNX ──
+	const events = await onnxPhysics(dt);
 
-	ball.x += ball.vx * dt;
-	ball.y += ball.vy * dt;
-
+	// ── Trail (JS — render only) ──
 	if (state.fx) {
 		trail.push({ x: ball.x, y: ball.y, t: state.time });
 		if (trail.length > PERF.maxTrail) trail.shift();
@@ -633,158 +783,89 @@ function update(ts) {
 		trail.length = 0;
 	}
 
-	if (ball.y - ball.r <= 0) {
-		ball.y = ball.r;
-		ball.vy *= -1;
-		if (state.fx) {
-			sparkLine(ball.x, ball.y, ball.vx * 0.03, 200, 6);
-		}
+	// ── Process events from physics ──
+	const hitPlayer = events[0] > 0.5;
+	const hitAi = events[1] > 0.5;
+	const wallTop = events[2] > 0.5;
+	const wallBottom = events[3] > 0.5;
+	const scoredL = events[4] > 0.5;
+	const scoredR = events[5] > 0.5;
+
+	if (wallTop) {
+		if (state.fx) sparkLine(ball.x, ball.y, ball.vx * 0.03, 200, 6);
 		beep("wall");
 	}
-	if (ball.y + ball.r >= H) {
-		ball.y = H - ball.r;
-		ball.vy *= -1;
-		if (state.fx) {
-			sparkLine(ball.x, ball.y, ball.vx * 0.03, -200, 6);
-		}
+	if (wallBottom) {
+		if (state.fx) sparkLine(ball.x, ball.y, ball.vx * 0.03, -200, 6);
 		beep("wall");
 	}
 
-	const px = paddle.inset;
-	const ax = W - ai.inset;
-
-	if (ball.vx < 0 && ball.x - ball.r <= px + paddle.w / 2) {
-		const top = paddle.y - paddle.h / 2;
-		const bot = paddle.y + paddle.h / 2;
-		if (ball.y >= top && ball.y <= bot) {
-			ball.x = px + paddle.w / 2 + ball.r;
-			rally++;
-
-			const n = (ball.y - paddle.y) / (paddle.h / 2);
-			const angle = n * 0.95;
-
-			const lvl = levelFromProgress();
-			const up = [1.02, 1.03, 1.035, 1.04, 1.045][lvl];
-			const newSpeed = clamp(ball.speed * (up + rally * 0.0016), 560, 980);
-
-			ball.vx = Math.abs(ball.vx);
-			ball.vy = angle * newSpeed;
-
-			const mag = Math.hypot(ball.vx, ball.vy) || 1;
-			ball.vx = (ball.vx / mag) * newSpeed;
-			ball.vy = (ball.vy / mag) * newSpeed;
-
-			if (state.fx) {
-				burst(ball.x, ball.y, 6);
-				sparkLine(ball.x, ball.y, 220, ball.vy * 0.05, 6);
-				shock(4);
-			}
-			beep("hit");
+	if (hitPlayer || hitAi) {
+		if (state.fx) {
+			burst(ball.x, ball.y, 6);
+			if (hitPlayer) sparkLine(ball.x, ball.y, 220, ball.vy * 0.05, 6);
+			if (hitAi) sparkLine(ball.x, ball.y, -220, ball.vy * 0.05, 6);
+			await onnxShock(4);
 		}
+		beep("hit");
 	}
 
-	if (ball.vx > 0 && ball.x + ball.r >= ax - ai.w / 2) {
-		const top = ai.y - ai.h / 2;
-		const bot = ai.y + ai.h / 2;
-		if (ball.y >= top && ball.y <= bot) {
-			ball.x = ax - ai.w / 2 - ball.r;
-			rally++;
-
-			const n = (ball.y - ai.y) / (ai.h / 2);
-			const angle = n * 0.9;
-
-			const lvl = levelFromProgress();
-			const up = [1.015, 1.025, 1.03, 1.035, 1.04][lvl];
-			const newSpeed = clamp(ball.speed * (up + rally * 0.0012), 560, 960);
-
-			ball.vx = -Math.abs(ball.vx);
-			ball.vy = angle * newSpeed;
-
-			const mag = Math.hypot(ball.vx, ball.vy) || 1;
-			ball.vx = (ball.vx / mag) * newSpeed;
-			ball.vy = (ball.vy / mag) * newSpeed;
-
-			if (state.fx) {
-				burst(ball.x, ball.y, 6);
-				sparkLine(ball.x, ball.y, -220, ball.vy * 0.05, 6);
-				shock(4);
-			}
-			beep("hit");
-		}
-	}
-
-	if (ball.x < -60) {
+	if (scoredR) {
 		score.R++;
 		sR.textContent = score.R;
 		rally = 0;
 		if (state.fx) {
 			burst(W / 2, H / 2, 10);
-			shock(6);
+			await onnxShock(6);
 		}
 		beep("score");
-		checkWinOrReset(-1);
+		await checkWinOrReset(-1);
 	}
-	if (ball.x > W + 60) {
+	if (scoredL) {
 		score.L++;
 		sL.textContent = score.L;
 		rally = 0;
 		if (state.fx) {
 			burst(W / 2, H / 2, 10);
-			shock(6);
+			await onnxShock(6);
 		}
 		beep("score");
-		checkWinOrReset(1);
+		await checkWinOrReset(1);
 	}
 
-	updateParticles(dt);
+	// ── Particles ← ONNX ──
+	if (state.fx) {
+		await onnxParticles(dt);
+	}
+
 	draw();
 }
 
-function checkWinOrReset(nextDir) {
-	if (score.L >= score.toWin) {
-		endGame(true);
-		return;
-	}
-	if (score.R >= score.toWin) {
-		endGame(false);
-		return;
-	}
-	resetRound(nextDir);
-}
+/* ═══════════════════════════════════════════════════════════════════
+   Init — load ONNX, then start
+   ═══════════════════════════════════════════════════════════════════ */
 
-function endGame(playerWon) {
-	state.running = true;
-	state.paused = true;
-	setPressed(btnPause, true);
+async function init() {
+	resize();
+	paddle.y = H / 2;
+	paddle.targetY = H / 2;
+	ai.y = H / 2;
+	ai.memoryY = H / 2;
+
+	setSoundIcon();
+	setFXIcon();
 	setPauseIcon();
 
-	overlayImg.src = END_IMG;
+	overlayImg.src = INTRO_IMG;
+	setIntro(true);
+	overlay.classList.remove("hidden");
+	if (playText) playText.textContent = "LOADING…";
 
-	const title = playerWon ? "YOU WIN" : "AI WINS";
-	const stats = `FINAL SCORE: ${score.L} - ${score.R}`;
-	const msg = playerWon
-		? "NICE WORK. RUN IT BACK AND PUSH FOR A PERFECT GAME."
-		: "CLOSE. YOU CAN BEAT IT. STAY CALM AND USE THE EDGES OF THE PADDLE.";
+	await loadONNX();
 
-	showOverlay(title, `${stats}<br><br>${msg}`);
+	if (playText) playText.textContent = "START";
 
-	if (playText) playText.textContent = "PLAY AGAIN";
-	beep("win");
+	requestAnimationFrame(update);
 }
 
-resize();
-paddle.y = H / 2;
-paddle.targetY = H / 2;
-ai.y = H / 2;
-ai.memoryY = H / 2;
-
-setSoundIcon();
-setFXIcon();
-setPauseIcon();
-
-overlayImg.src = INTRO_IMG;
-setIntro(true);
-overlay.classList.remove("hidden");
-if (playText) playText.textContent = "START";
-
-requestAnimationFrame(update);
+init();
