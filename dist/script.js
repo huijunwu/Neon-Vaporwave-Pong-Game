@@ -18,9 +18,8 @@ const cutSub = document.getElementById("cutSub");
 const sL = document.getElementById("sL");
 const sR = document.getElementById("sR");
 
-const INTRO_IMG =
-	"https://mattcannon.games/codepen/press-start/codepong-title.png";
-const END_IMG = "https://mattcannon.games/codepen/press-start/codepong26.png";
+const INTRO_IMG = "./assets/codepong-title.png";
+const END_IMG = "./assets/codepong26.png";
 
 let W = 0,
 	H = 0;
@@ -140,7 +139,7 @@ function togglePause() {
 
 	if (state.paused) {
 		overlayImg.src =
-			"https://mattcannon.games/codepen/press-start/codepong26.png";
+			"./assets/codepong26.png";
 		showOverlay("PAUSED", "PRESS START OR SPACE TO CONTINUE");
 	} else {
 		overlayImg.src = INTRO_IMG;
