@@ -3,9 +3,9 @@
  * keeping the main thread free for rendering and input.
  */
 
-import * as ort from "./node_modules/onnxruntime-web/dist/ort.all.min.mjs";
+import * as ort from "../node_modules/onnxruntime-web/dist/ort.all.min.mjs";
 
-ort.env.wasm.wasmPaths = new URL("./node_modules/onnxruntime-web/dist/", import.meta.url).href;
+ort.env.wasm.wasmPaths = new URL("../node_modules/onnxruntime-web/dist/", import.meta.url).href;
 ort.env.wasm.numThreads = 1;
 
 const sessions = {};
@@ -13,6 +13,7 @@ const sessions = {};
 function scalar(v) {
 	return new ort.Tensor("float32", Float32Array.from([v]), []);
 }
+
 
 const handlers = {
 	async init({ base, models }) {
