@@ -99,7 +99,7 @@ ONNX 输出: `dist/onnx/`
 | 32  | `resetRound(direction)` (L334)    | `Math.random()` + 副作用（burst, beep） |
 | 33  | `resetGame()` (L353)              | 重置所有状态 + DOM                      |
 | 34  | `start()` (L377)                  | 状态机入口 + DOM                        |
-| 35  | `hardRestart()` (L388)            | 状态机入口 + DOM                        |
+| 35  | `hardRestart()` (L388)            | `start()` 的别名（ONNX 版已合并）       |
 | 36  | `checkWinOrReset(nextDir)` (L744) | 判定得分 → endGame 或 resetRound        |
 | 37  | `endGame(playerWon)` (L756)       | 状态机 + DOM 遮罩层                     |
 
