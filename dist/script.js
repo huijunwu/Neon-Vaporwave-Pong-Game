@@ -1,32 +1,51 @@
 /* ═══════════════════════════════════════════════════════════════════
-   ONNX Runtime setup
+   ONNX Worker — all inference runs off the main thread
    ═══════════════════════════════════════════════════════════════════ */
 
-ort.env.wasm.numThreads = 1;
+const worker = new Worker("./onnx-worker.mjs", { type: "module" });
+let _reqId = 0;
+const _pending = new Map();
 
-const ORT_BASE = "./onnx/";
-let S = {}; // ONNX sessions
-
-function scalar(v) {
-	return new ort.Tensor("float32", Float32Array.from([v]), []);
-}
-function val(t) {
-	return t.data[0];
-}
-
-async function loadONNX() {
-	const names = [
-		"clamp",
-		"lerp",
-		"shock",
-		"ai",
-		"physics",
-		"cutscene",
-		"particles"
-	];
-	for (const n of names) {
-		S[n] = await ort.InferenceSession.create(ORT_BASE + "pong_" + n + ".onnx");
+worker.onmessage = (e) => {
+	const { type, id, outputs, message } = e.data;
+	if (type === "ready") {
+		_pending.get("init")?.resolve();
+		_pending.delete("init");
 	}
+	if (type === "result") {
+		_pending.get(id)?.resolve(outputs);
+		_pending.delete(id);
+	}
+	if (type === "error") {
+		const p = _pending.get(id ?? "init");
+		if (p) {
+			p.reject(new Error(message));
+			_pending.delete(id ?? "init");
+		}
+	}
+};
+
+worker.onerror = (e) => {
+	console.error("ONNX Worker error:", e.message);
+};
+
+function workerInit() {
+	return new Promise((resolve, reject) => {
+		_pending.set("init", { resolve, reject });
+		worker.postMessage({
+			type: "init",
+			base: "./onnx/",
+			models: ["clamp", "lerp", "shock", "ai", "physics", "cutscene", "particles"]
+		});
+	});
+}
+
+function workerRun(model, inputs) {
+	return new Promise((resolve, reject) => {
+		const id = _reqId++;
+		_pending.set(id, { resolve, reject });
+		worker.postMessage({ id, type: "run", model, inputs });
+	});
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -115,87 +134,92 @@ window.addEventListener("resize", resize);
    ═══════════════════════════════════════════════════════════════════ */
 
 async function clamp(v, a, b) {
-	const r = await S.clamp.run({ v: scalar(v), a: scalar(a), b: scalar(b) });
-	return val(r.result);
+	const r = await workerRun("clamp", { v, a, b });
+	return r.result;
 }
 
 async function lerp(a, b, t) {
-	const r = await S.lerp.run({ a: scalar(a), b: scalar(b), t: scalar(t) });
-	return val(r.result);
+	const r = await workerRun("lerp", { a, b, t });
+	return r.result;
 }
 
 async function onnxShock(amount) {
-	const r = await S.shock.run({
-		shake: scalar(state.shake),
-		amount: scalar(amount)
-	});
-	state.shake = val(r.new_shake);
+	const r = await workerRun("shock", { shake: state.shake, amount });
+	state.shake = r.new_shake;
 }
 
 async function onnxAiUpdate(dt) {
-	const r = await S.ai.run({
-		ball_y: scalar(ball.y),
-		ball_vy: scalar(ball.vy),
-		ball_vx: scalar(ball.vx),
-		ai_y: scalar(ai.y),
-		ai_memoryY: scalar(ai.memoryY),
-		score_L: scalar(score.L),
-		score_R: scalar(score.R),
-		dt: scalar(dt),
-		H: scalar(H),
-		rand_val: scalar(Math.random() * 2 - 1)
+	const r = await workerRun("ai", {
+		ball_y: ball.y,
+		ball_vy: ball.vy,
+		ball_vx: ball.vx,
+		ai_y: ai.y,
+		ai_memoryY: ai.memoryY,
+		score_L: score.L,
+		score_R: score.R,
+		dt,
+		H,
+		rand_val: Math.random() * 2 - 1
 	});
-	ai.y = val(r.new_ai_y);
-	ai.memoryY = val(r.new_ai_memoryY);
-	ai.vy = val(r.ai_vy);
-	ai.h = val(r.ai_h);
+	ai.y = r.new_ai_y;
+	ai.memoryY = r.new_ai_memoryY;
+	ai.vy = r.ai_vy;
+	ai.h = r.ai_h;
 }
 
 async function onnxPhysics(dt) {
-	const r = await S.physics.run({
-		ball_x: scalar(ball.x),
-		ball_y: scalar(ball.y),
-		ball_vx: scalar(ball.vx),
-		ball_vy: scalar(ball.vy),
-		paddle_y: scalar(paddle.y),
-		paddle_target_y: scalar(paddle.targetY),
-		paddle_h: scalar(paddle.h),
-		ai_y: scalar(ai.y),
-		ai_h: scalar(ai.h),
-		score_L: scalar(score.L),
-		score_R: scalar(score.R),
-		rally: scalar(rally),
-		dt: scalar(dt),
-		W: scalar(W),
-		H: scalar(H)
+	const r = await workerRun("physics", {
+		ball_x: ball.x,
+		ball_y: ball.y,
+		ball_vx: ball.vx,
+		ball_vy: ball.vy,
+		paddle_y: paddle.y,
+		paddle_target_y: paddle.targetY,
+		paddle_h: paddle.h,
+		ai_y: ai.y,
+		ai_h: ai.h,
+		score_L: score.L,
+		score_R: score.R,
+		rally,
+		dt,
+		W,
+		H
 	});
-	ball.x = val(r.new_ball_x);
-	ball.y = val(r.new_ball_y);
-	ball.vx = val(r.new_ball_vx);
-	ball.vy = val(r.new_ball_vy);
-	paddle.y = val(r.new_paddle_y);
-	rally = val(r.new_rally);
-	return r.events.data; // Float32Array[6]
+	ball.x = r.new_ball_x;
+	ball.y = r.new_ball_y;
+	ball.vx = r.new_ball_vx;
+	ball.vy = r.new_ball_vy;
+	paddle.y = r.new_paddle_y;
+	rally = r.new_rally;
+	const ev = r.events.data;
+	return {
+		hitPlayer: ev[0] > 0.5,
+		hitAi: ev[1] > 0.5,
+		wallTop: ev[2] > 0.5,
+		wallBottom: ev[3] > 0.5,
+		scoredL: ev[4] > 0.5,
+		scoredR: ev[5] > 0.5
+	};
 }
 
 async function onnxCutscene(dt) {
-	const r = await S.cutscene.run({
-		cut: scalar(state.cut ? 1.0 : 0.0),
-		cutT: scalar(state.cutT),
-		slowmo: scalar(state.slowmo),
-		dt: scalar(dt)
+	const r = await workerRun("cutscene", {
+		cut: state.cut ? 1.0 : 0.0,
+		cutT: state.cutT,
+		slowmo: state.slowmo,
+		dt
 	});
-	state.cut = val(r.new_cut) > 0.5;
-	state.cutT = val(r.new_cutT);
-	state.slowmo = val(r.new_slowmo);
-	return val(r.cut_ended) > 0.5;
+	state.cut = r.new_cut > 0.5;
+	state.cutT = r.new_cutT;
+	state.slowmo = r.new_slowmo;
+	return r.cut_ended > 0.5;
 }
 
 async function onnxParticles(dt) {
-	const r = await S.particles.run({
-		particles: new ort.Tensor("float32", new Float32Array(particleBuf), [MAX_P, 7]),
-		sparks: new ort.Tensor("float32", new Float32Array(sparkBuf), [MAX_S, 7]),
-		dt: scalar(dt)
+	const r = await workerRun("particles", {
+		particles: { data: particleBuf.slice(), dims: [MAX_P, 7] },
+		sparks: { data: sparkBuf.slice(), dims: [MAX_S, 7] },
+		dt
 	});
 	particleBuf.set(r.new_particles.data);
 	sparkBuf.set(r.new_sparks.data);
@@ -518,16 +542,7 @@ async function start() {
 	await resetGame();
 }
 
-async function hardRestart() {
-	state.running = true;
-	state.paused = false;
-	setPressed(btnPause, false);
-	setPauseIcon();
-	setIntro(false);
-	hideOverlay();
-	if (playText) playText.textContent = "START";
-	await resetGame();
-}
+const hardRestart = start;
 
 async function checkWinOrReset(nextDir) {
 	if (score.L >= score.toWin) {
@@ -720,6 +735,18 @@ function drawParticles() {
 	ctx.globalAlpha = 1;
 }
 
+async function handleScore(side, nextDir) {
+	score[side]++;
+	(side === "L" ? sL : sR).textContent = score[side];
+	rally = 0;
+	if (state.fx) {
+		burst(W / 2, H / 2, 10);
+		await onnxShock(6);
+	}
+	beep("score");
+	await checkWinOrReset(nextDir);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    Game loop (async — uses ONNX)
    ═══════════════════════════════════════════════════════════════════ */
@@ -784,54 +811,23 @@ async function update(ts) {
 	}
 
 	// ── Process events from physics ──
-	const hitPlayer = events[0] > 0.5;
-	const hitAi = events[1] > 0.5;
-	const wallTop = events[2] > 0.5;
-	const wallBottom = events[3] > 0.5;
-	const scoredL = events[4] > 0.5;
-	const scoredR = events[5] > 0.5;
-
-	if (wallTop) {
-		if (state.fx) sparkLine(ball.x, ball.y, ball.vx * 0.03, 200, 6);
-		beep("wall");
-	}
-	if (wallBottom) {
-		if (state.fx) sparkLine(ball.x, ball.y, ball.vx * 0.03, -200, 6);
+	if (events.wallTop || events.wallBottom) {
+		if (state.fx)
+			sparkLine(ball.x, ball.y, ball.vx * 0.03, events.wallTop ? 200 : -200, 6);
 		beep("wall");
 	}
 
-	if (hitPlayer || hitAi) {
+	if (events.hitPlayer || events.hitAi) {
 		if (state.fx) {
 			burst(ball.x, ball.y, 6);
-			if (hitPlayer) sparkLine(ball.x, ball.y, 220, ball.vy * 0.05, 6);
-			if (hitAi) sparkLine(ball.x, ball.y, -220, ball.vy * 0.05, 6);
+			sparkLine(ball.x, ball.y, events.hitPlayer ? 220 : -220, ball.vy * 0.05, 6);
 			await onnxShock(4);
 		}
 		beep("hit");
 	}
 
-	if (scoredR) {
-		score.R++;
-		sR.textContent = score.R;
-		rally = 0;
-		if (state.fx) {
-			burst(W / 2, H / 2, 10);
-			await onnxShock(6);
-		}
-		beep("score");
-		await checkWinOrReset(-1);
-	}
-	if (scoredL) {
-		score.L++;
-		sL.textContent = score.L;
-		rally = 0;
-		if (state.fx) {
-			burst(W / 2, H / 2, 10);
-			await onnxShock(6);
-		}
-		beep("score");
-		await checkWinOrReset(1);
-	}
+	if (events.scoredR) await handleScore("R", -1);
+	if (events.scoredL) await handleScore("L", 1);
 
 	// ── Particles ← ONNX ──
 	if (state.fx) {
@@ -861,7 +857,7 @@ async function init() {
 	overlay.classList.remove("hidden");
 	if (playText) playText.textContent = "LOADING…";
 
-	await loadONNX();
+	await workerInit();
 
 	if (playText) playText.textContent = "START";
 
