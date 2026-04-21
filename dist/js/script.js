@@ -2,7 +2,7 @@
    ONNX Worker — all inference runs off the main thread
    ═══════════════════════════════════════════════════════════════════ */
 
-const worker = new Worker("./onnx-worker.mjs", { type: "module" });
+const worker = new Worker("./js/onnx-worker.mjs", { type: "module" });
 let _reqId = 0;
 const _pending = new Map();
 
@@ -34,8 +34,8 @@ function workerInit() {
 		_pending.set("init", { resolve, reject });
 		worker.postMessage({
 			type: "init",
-			base: "./onnx/",
-			models: ["clamp", "lerp", "shock", "ai", "physics", "cutscene", "particles"]
+			base: "/assets/onnx/",
+			models: ["step", "policy"]
 		});
 	});
 }
@@ -72,8 +72,8 @@ const cutSub = document.getElementById("cutSub");
 const sL = document.getElementById("sL");
 const sR = document.getElementById("sR");
 
-const INTRO_IMG = "./assets/codepong-title.png";
-const END_IMG = "./assets/codepong26.png";
+const INTRO_IMG = "./assets/images/codepong-title.png";
+const END_IMG = "./assets/images/codepong26.png";
 
 /* ═══════════════════════════════════════════════════════════════════
    State / constants
@@ -98,9 +98,12 @@ const state = {
 const score = { L: 0, R: 0, toWin: 11 };
 let rally = 0;
 
-const paddle = { w: 14, h: 110, inset: 26, y: 0, targetY: 0 };
-const ai = { w: 14, h: 110, inset: 26, y: 0, vy: 0, memoryY: 0 };
+const paddle = { w: 14, h: 110, inset: 26, y: 0 };
+const ai = { w: 14, h: 110, inset: 26, y: 0 };
 const ball = { r: 10, x: 0, y: 0, vx: 0, vy: 0, speed: 560 };
+
+const ai_left = { memoryY: 0 };
+const ai_right = { memoryY: 0 };
 
 const trail = [];
 
@@ -112,11 +115,23 @@ const sparkBuf = new Float32Array(MAX_S * 7);
 const PERF = { maxTrail: 16 };
 
 /* ═══════════════════════════════════════════════════════════════════
-   Helpers — rand stays in JS (Math.random)
+   Helpers — native JS
    ═══════════════════════════════════════════════════════════════════ */
 
 function rand(a, b) {
 	return a + Math.random() * (b - a);
+}
+
+function clamp(v, a, b) {
+	return Math.max(a, Math.min(b, v));
+}
+
+function lerp(a, b, t) {
+	return a + (b - a) * t;
+}
+
+function shock(a) {
+	state.shake = Math.min(10, state.shake + a);
 }
 
 function resize() {
@@ -130,99 +145,91 @@ function resize() {
 window.addEventListener("resize", resize);
 
 /* ═══════════════════════════════════════════════════════════════════
-   ONNX wrapper functions
+   Cutscene / particle update — native JS
    ═══════════════════════════════════════════════════════════════════ */
 
-async function clamp(v, a, b) {
-	const r = await workerRun("clamp", { v, a, b });
-	return r.result;
+function updateCutscene(dt) {
+	if (!state.cut) return;
+	state.cutT += dt;
+
+	if (state.cutT > 0.9) {
+		state.slowmo = lerp(state.slowmo, 1, 1 - Math.pow(0.0009, dt));
+	}
+	if (state.cutT > 1.35) {
+		state.cut = false;
+		state.slowmo = 1;
+		cutsceneEl.classList.remove("on");
+		cutsceneEl.setAttribute("aria-hidden", "true");
+	}
 }
 
-async function lerp(a, b, t) {
-	const r = await workerRun("lerp", { a, b, t });
-	return r.result;
+function updateParticles(dt) {
+	for (let i = 0; i < MAX_P; i++) {
+		const off = i * 7;
+		if (particleBuf[off + 6] === 0) continue;
+		particleBuf[off + 5] += dt;
+		particleBuf[off] += particleBuf[off + 2] * dt;
+		particleBuf[off + 1] += particleBuf[off + 3] * dt;
+		const drag = Math.pow(0.14, dt);
+		particleBuf[off + 2] *= drag;
+		particleBuf[off + 3] *= drag;
+		if (particleBuf[off + 5] >= particleBuf[off + 4]) {
+			particleBuf[off + 6] = 0;
+		}
+	}
+	for (let i = 0; i < MAX_S; i++) {
+		const off = i * 7;
+		if (sparkBuf[off + 6] === 0) continue;
+		sparkBuf[off + 5] += dt;
+		sparkBuf[off] += sparkBuf[off + 2] * dt;
+		sparkBuf[off + 1] += sparkBuf[off + 3] * dt;
+		const drag = Math.pow(0.06, dt);
+		sparkBuf[off + 2] *= drag;
+		sparkBuf[off + 3] *= drag;
+		if (sparkBuf[off + 5] >= sparkBuf[off + 4]) {
+			sparkBuf[off + 6] = 0;
+		}
+	}
 }
 
-async function onnxShock(amount) {
-	const r = await workerRun("shock", { shake: state.shake, amount });
-	state.shake = r.new_shake;
+/* ═══════════════════════════════════════════════════════════════════
+   ONNX wrapper functions — policy + step
+   ═══════════════════════════════════════════════════════════════════ */
+
+function buildObs(isLeft) {
+	const W2 = W, H2 = H, S = 560;
+	if (isLeft) {
+		return [ball.x / W2, ball.y / H2, ball.vx / S, ball.vy / S, paddle.y / H2, ai.y / H2];
+	} else {
+		return [ball.x / W2, ball.y / H2, ball.vx / S, ball.vy / S, ai.y / H2, paddle.y / H2];
+	}
 }
 
-async function onnxAiUpdate(dt) {
-	const r = await workerRun("ai", {
-		ball_y: ball.y,
-		ball_vy: ball.vy,
-		ball_vx: ball.vx,
-		ai_y: ai.y,
-		ai_memoryY: ai.memoryY,
-		score_L: score.L,
-		score_R: score.R,
-		dt,
-		H,
-		rand_val: Math.random() * 2 - 1
-	});
-	ai.y = r.new_ai_y;
-	ai.memoryY = r.new_ai_memoryY;
-	ai.vy = r.ai_vy;
-	ai.h = r.ai_h;
-}
-
-async function onnxPhysics(dt) {
-	const r = await workerRun("physics", {
-		ball_x: ball.x,
-		ball_y: ball.y,
-		ball_vx: ball.vx,
-		ball_vy: ball.vy,
-		paddle_y: paddle.y,
-		paddle_target_y: paddle.targetY,
-		paddle_h: paddle.h,
-		ai_y: ai.y,
-		ai_h: ai.h,
-		score_L: score.L,
-		score_R: score.R,
-		rally,
-		dt,
-		W,
+async function onnxPolicy(obs, memoryY) {
+	const r = await workerRun("policy", {
+		obs: { data: Float32Array.from(obs), dims: [6] },
+		memory_y: memoryY,
+		rand_val: Math.random() * 2 - 1,
 		H
 	});
-	ball.x = r.new_ball_x;
-	ball.y = r.new_ball_y;
-	ball.vx = r.new_ball_vx;
-	ball.vy = r.new_ball_vy;
-	paddle.y = r.new_paddle_y;
-	rally = r.new_rally;
-	const ev = r.events.data;
+	return { action: r.action, memoryY: r.new_memory_y };
+}
+
+async function onnxStep(ballX, ballY, ballVx, ballVy,
+                        paddleLY, paddleRY, actionL, actionR, rallyVal) {
+	const r = await workerRun("step", {
+		ball_x: ballX, ball_y: ballY, ball_vx: ballVx, ball_vy: ballVy,
+		paddle_left_y: paddleLY, paddle_right_y: paddleRY,
+		action_left: actionL, action_right: actionR,
+		rally: rallyVal, W, H
+	});
 	return {
-		hitPlayer: ev[0] > 0.5,
-		hitAi: ev[1] > 0.5,
-		wallTop: ev[2] > 0.5,
-		wallBottom: ev[3] > 0.5,
-		scoredL: ev[4] > 0.5,
-		scoredR: ev[5] > 0.5
+		ballX: r.new_ball_x, ballY: r.new_ball_y,
+		ballVx: r.new_ball_vx, ballVy: r.new_ball_vy,
+		paddleLY: r.new_paddle_left_y, paddleRY: r.new_paddle_right_y,
+		rally: r.new_rally,
+		events: r.events.data  // [hitL, hitR, hitTop, hitBot, scoredL, scoredR]
 	};
-}
-
-async function onnxCutscene(dt) {
-	const r = await workerRun("cutscene", {
-		cut: state.cut ? 1.0 : 0.0,
-		cutT: state.cutT,
-		slowmo: state.slowmo,
-		dt
-	});
-	state.cut = r.new_cut > 0.5;
-	state.cutT = r.new_cutT;
-	state.slowmo = r.new_slowmo;
-	return r.cut_ended > 0.5;
-}
-
-async function onnxParticles(dt) {
-	const r = await workerRun("particles", {
-		particles: { data: particleBuf.slice(), dims: [MAX_P, 7] },
-		sparks: { data: sparkBuf.slice(), dims: [MAX_S, 7] },
-		dt
-	});
-	particleBuf.set(r.new_particles.data);
-	sparkBuf.set(r.new_sparks.data);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -314,35 +321,9 @@ function beep(kind) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   Input (DOM events — stays in JS)
+   Input — watch mode (keyboard shortcuts only, no paddle control)
    ═══════════════════════════════════════════════════════════════════ */
 
-let pointerActive = false;
-
-async function setTargetFromClientY(clientY) {
-	const rect = canvas.getBoundingClientRect();
-	const y = clientY - rect.top;
-	paddle.targetY = await clamp(y, paddle.h / 2 + 8, H - paddle.h / 2 - 8);
-}
-
-canvas.addEventListener("pointerdown", (e) => {
-	pointerActive = true;
-	try {
-		canvas.setPointerCapture(e.pointerId);
-	} catch {}
-	setTargetFromClientY(e.clientY);
-});
-canvas.addEventListener("pointermove", (e) => {
-	if (!pointerActive) return;
-	setTargetFromClientY(e.clientY);
-});
-canvas.addEventListener("pointerup", () => {
-	pointerActive = false;
-});
-canvas.addEventListener("mousemove", (e) => {
-	if (pointerActive) return;
-	setTargetFromClientY(e.clientY);
-});
 window.addEventListener("touchmove", (e) => e.preventDefault(), {
 	passive: false
 });
@@ -431,7 +412,7 @@ function togglePause() {
 	setPressed(btnPause, state.paused);
 
 	if (state.paused) {
-		overlayImg.src = "./assets/codepong26.png";
+		overlayImg.src = "./assets/images/codepong26.png";
 		showOverlay("PAUSED", "PRESS START OR SPACE TO CONTINUE");
 	} else {
 		overlayImg.src = INTRO_IMG;
@@ -484,10 +465,10 @@ function maybeMatchPointCutscene() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   Game lifecycle (state machine + DOM + rand — stays JS)
+   Game lifecycle
    ═══════════════════════════════════════════════════════════════════ */
 
-async function resetRound(direction) {
+function resetRound(direction) {
 	if (direction === undefined) direction = Math.random() < 0.5 ? -1 : 1;
 	ball.x = W / 2;
 	ball.y = H / 2;
@@ -500,14 +481,14 @@ async function resetRound(direction) {
 
 	if (state.fx) {
 		burst(ball.x, ball.y, 8);
-		await onnxShock(3);
+		shock(3);
 	}
 	beep("start");
 
 	maybeMatchPointCutscene();
 }
 
-async function resetGame() {
+function resetGame() {
 	score.L = 0;
 	score.R = 0;
 	sL.textContent = "0";
@@ -519,19 +500,19 @@ async function resetGame() {
 	ai.h = 110;
 
 	paddle.y = H / 2;
-	paddle.targetY = H / 2;
-
 	ai.y = H / 2;
-	ai.memoryY = H / 2;
+
+	ai_left.memoryY = H / 2;
+	ai_right.memoryY = H / 2;
 
 	trail.length = 0;
 	particleBuf.fill(0);
 	sparkBuf.fill(0);
 
-	await resetRound();
+	resetRound();
 }
 
-async function start() {
+function start() {
 	state.running = true;
 	state.paused = false;
 	setPressed(btnPause, false);
@@ -539,12 +520,12 @@ async function start() {
 	setIntro(false);
 	hideOverlay();
 	if (playText) playText.textContent = "START";
-	await resetGame();
+	resetGame();
 }
 
 const hardRestart = start;
 
-async function checkWinOrReset(nextDir) {
+function checkWinOrReset(nextDir) {
 	if (score.L >= score.toWin) {
 		endGame(true);
 		return;
@@ -553,7 +534,7 @@ async function checkWinOrReset(nextDir) {
 		endGame(false);
 		return;
 	}
-	await resetRound(nextDir);
+	resetRound(nextDir);
 }
 
 function endGame(playerWon) {
@@ -735,20 +716,20 @@ function drawParticles() {
 	ctx.globalAlpha = 1;
 }
 
-async function handleScore(side, nextDir) {
+function handleScore(side, nextDir) {
 	score[side]++;
 	(side === "L" ? sL : sR).textContent = score[side];
 	rally = 0;
 	if (state.fx) {
 		burst(W / 2, H / 2, 10);
-		await onnxShock(6);
+		shock(6);
 	}
 	beep("score");
-	await checkWinOrReset(nextDir);
+	checkWinOrReset(nextDir);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   Game loop (async — uses ONNX)
+   Game loop (async — uses ONNX policy + step)
    ═══════════════════════════════════════════════════════════════════ */
 
 let last = 0;
@@ -761,31 +742,13 @@ async function update(ts) {
 	let dt = now - last;
 	last = now;
 
-	// ── dt clamp ← ONNX ──
-	dt = await clamp(dt, 0.008, 0.02);
+	dt = clamp(dt, 0.008, 0.02);
 	dt *= state.slowmo;
 
 	state.time += dt;
 	state.shake = Math.max(0, state.shake - dt * 22);
 
-	// ── Cutscene ← ONNX ──
-	const cutEnded = await onnxCutscene(dt);
-	if (cutEnded) {
-		cutsceneEl.classList.remove("on");
-		cutsceneEl.setAttribute("aria-hidden", "true");
-	}
-
-	// ── Keyboard input (clamp ← ONNX) ──
-	let keyDir = 0;
-	if (keys.has("w") || keys.has("arrowup")) keyDir -= 1;
-	if (keys.has("s") || keys.has("arrowdown")) keyDir += 1;
-	if (keyDir) {
-		paddle.targetY = await clamp(
-			paddle.targetY + keyDir * 780 * dt,
-			paddle.h / 2 + 8,
-			H - paddle.h / 2 - 8
-		);
-	}
+	updateCutscene(dt);
 
 	if (!state.running) {
 		draw();
@@ -796,11 +759,38 @@ async function update(ts) {
 		return;
 	}
 
-	// ── AI ← ONNX ──
-	await onnxAiUpdate(dt);
+	// ── AI decisions for both paddles ← ONNX ──
+	const obsL = buildObs(true);
+	const obsR = buildObs(false);
+	const leftResult = await onnxPolicy(obsL, ai_left.memoryY);
+	const rightResult = await onnxPolicy(obsR, ai_right.memoryY);
+	ai_left.memoryY = leftResult.memoryY;
+	ai_right.memoryY = rightResult.memoryY;
 
-	// ── Physics + collision ← ONNX ──
-	const events = await onnxPhysics(dt);
+	// ── Physics step ← ONNX ──
+	const stepResult = await onnxStep(
+		ball.x, ball.y, ball.vx, ball.vy,
+		paddle.y, ai.y,
+		leftResult.action, rightResult.action,
+		rally
+	);
+	ball.x = stepResult.ballX;
+	ball.y = stepResult.ballY;
+	ball.vx = stepResult.ballVx;
+	ball.vy = stepResult.ballVy;
+	paddle.y = stepResult.paddleLY;
+	ai.y = stepResult.paddleRY;
+	rally = stepResult.rally;
+
+	const ev = stepResult.events;
+	const events = {
+		hitLeft: ev[0] > 0.5,
+		hitRight: ev[1] > 0.5,
+		hitTop: ev[2] > 0.5,
+		hitBottom: ev[3] > 0.5,
+		scoredL: ev[4] > 0.5,
+		scoredR: ev[5] > 0.5
+	};
 
 	// ── Trail (JS — render only) ──
 	if (state.fx) {
@@ -811,27 +801,27 @@ async function update(ts) {
 	}
 
 	// ── Process events from physics ──
-	if (events.wallTop || events.wallBottom) {
+	if (events.hitTop || events.hitBottom) {
 		if (state.fx)
-			sparkLine(ball.x, ball.y, ball.vx * 0.03, events.wallTop ? 200 : -200, 6);
+			sparkLine(ball.x, ball.y, ball.vx * 0.03, events.hitTop ? 200 : -200, 6);
 		beep("wall");
 	}
 
-	if (events.hitPlayer || events.hitAi) {
+	if (events.hitLeft || events.hitRight) {
 		if (state.fx) {
 			burst(ball.x, ball.y, 6);
-			sparkLine(ball.x, ball.y, events.hitPlayer ? 220 : -220, ball.vy * 0.05, 6);
-			await onnxShock(4);
+			sparkLine(ball.x, ball.y, events.hitLeft ? 220 : -220, ball.vy * 0.05, 6);
+			shock(4);
 		}
 		beep("hit");
 	}
 
-	if (events.scoredR) await handleScore("R", -1);
-	if (events.scoredL) await handleScore("L", 1);
+	if (events.scoredR) handleScore("R", -1);
+	if (events.scoredL) handleScore("L", 1);
 
-	// ── Particles ← ONNX ──
+	// ── Particles — native JS ──
 	if (state.fx) {
-		await onnxParticles(dt);
+		updateParticles(dt);
 	}
 
 	draw();
@@ -844,9 +834,10 @@ async function update(ts) {
 async function init() {
 	resize();
 	paddle.y = H / 2;
-	paddle.targetY = H / 2;
 	ai.y = H / 2;
-	ai.memoryY = H / 2;
+
+	ai_left.memoryY = H / 2;
+	ai_right.memoryY = H / 2;
 
 	setSoundIcon();
 	setFXIcon();

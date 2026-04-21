@@ -1,3 +1,4 @@
-src/python/__pycache__/
-dist/onnx/*.onnx.data
+**/__pycache__/
+*.egg-info/
+dist/assets/onnx/*.onnx.data
 dist/node_modules/
