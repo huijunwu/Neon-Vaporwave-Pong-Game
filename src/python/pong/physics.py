@@ -2,9 +2,7 @@
 Pong physics + AI as pure functions — single source of truth.
 
 Used by:
-  - pong/rl/envs/pong.py          (RL training)
-  - pong/rl/agents/rule_based.py   (rule-based agent)
-  - pong/onnx_modules.py           (ONNX export wrappers)
+  - pong/onnx_modules.py  (PongStepModule + PongPolicyModule)
 
 Symmetric: left and right paddles use identical physics.
 All functions are pure tensor ops, torch.where for branching.
@@ -126,6 +124,118 @@ def ai_track(ball_y: Tensor, ball_vy: Tensor,
 
     t = 1.0 - torch.pow(torch.tensor(0.0006), dt / reaction)
     return memory_y + (target - memory_y) * t
+
+
+def serve_ball_from_rand(rand_angle: Tensor, rand_dir: Tensor,
+                         court_w: _Scalar = COURT_W,
+                         court_h: _Scalar = COURT_H,
+                         ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Ball serve from random values (provided by caller).
+    rand_angle: uniform [0,1), rand_dir: uniform [0,1).
+    Returns (bx, by, bvx, bvy)."""
+    angle = (rand_angle - 0.5) * 1.2
+    direction = torch.where(rand_dir > 0.5, torch.tensor(1.0), torch.tensor(-1.0))
+    bvx = direction * BALL_BASE_SPEED * torch.cos(angle)
+    bvy = BALL_BASE_SPEED * torch.sin(angle)
+    cx = court_w / 2.0 if isinstance(court_w, Tensor) else torch.tensor(court_w / 2.0)
+    cy = court_h / 2.0 if isinstance(court_h, Tensor) else torch.tensor(court_h / 2.0)
+    return cx, cy, bvx, bvy
+
+
+def serve_ball_from_seed(seed: Tensor, court_w: _Scalar = COURT_W,
+                         court_h: _Scalar = COURT_H,
+                         ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Deterministic ball serve from a seed (for RL training).
+    Returns (bx, by, bvx, bvy, new_seed)."""
+    from pong.functional import split_seed, manual_uniform
+    s1, s2, s3 = split_seed(seed, 3)
+    bx, by, bvx, bvy = serve_ball_from_rand(
+        manual_uniform(s1), manual_uniform(s2), court_w, court_h,
+    )
+    return bx, by, bvx, bvy, s3
+
+
+def full_step(ball_x: Tensor, ball_y: Tensor, ball_vx: Tensor, ball_vy: Tensor,
+              paddle_left_y: Tensor, paddle_right_y: Tensor,
+              score_left: Tensor, score_right: Tensor,
+              rally: Tensor,
+              action_left: Tensor, action_right: Tensor,
+              rand_angle: Tensor, rand_dir: Tensor,
+              court_w: _Scalar = COURT_W, court_h: _Scalar = COURT_H,
+              ) -> tuple:
+    """Complete game step: physics + scoring + auto-serve + game-over.
+
+    rand_angle, rand_dir: uniform [0,1) from caller (JS or RL seed-based).
+    Used for serve direction when a point is scored.
+
+    Returns: (new_ball_x, new_ball_y, new_ball_vx, new_ball_vy,
+              new_paddle_left_y, new_paddle_right_y,
+              new_score_left, new_score_right,
+              new_rally,
+              events[6], game_over)
+    """
+    new_left_y = apply_action(paddle_left_y, action_left, court_h=court_h)
+    new_right_y = apply_action(paddle_right_y, action_right, court_h=court_h)
+
+    bx, by = ball_move(ball_x, ball_y, ball_vx, ball_vy)
+    bvx = ball_vx
+    bvy = ball_vy
+
+    by, bvy, hit_top, hit_bottom = wall_collide(by, bvy, h=court_h)
+
+    bx, bvx, bvy, new_rally, hit_left = paddle_collide(
+        bx, by, bvx, bvy, new_left_y, PADDLE_INSET, rally, going_left=True,
+    )
+    bx, bvx, bvy, new_rally, hit_right = paddle_collide(
+        bx, by, bvx, bvy, new_right_y, court_w - PADDLE_INSET, new_rally, going_left=False,
+    )
+
+    scored_left, scored_right = score_detect(bx, w=court_w)
+    scored_any = scored_left | scored_right
+
+    new_score_left = score_left + scored_left.float()
+    new_score_right = score_right + scored_right.float()
+
+    # Auto-serve on score
+    serve_bx, serve_by, serve_bvx, serve_bvy = serve_ball_from_rand(
+        rand_angle, rand_dir, court_w, court_h,
+    )
+    bx = torch.where(scored_any, serve_bx, bx)
+    by = torch.where(scored_any, serve_by, by)
+    bvx = torch.where(scored_any, serve_bvx, bvx)
+    bvy = torch.where(scored_any, serve_bvy, bvy)
+    new_rally = torch.where(scored_any, torch.tensor(0.0), new_rally)
+
+    game_over = (new_score_left >= MAX_SCORE) | (new_score_right >= MAX_SCORE)
+
+    events = torch.stack([
+        hit_left.float(), hit_right.float(),
+        hit_top.float(), hit_bottom.float(),
+        scored_left.float(), scored_right.float(),
+    ])
+
+    return (bx, by, bvx, bvy,
+            new_left_y, new_right_y,
+            new_score_left, new_score_right,
+            new_rally,
+            events, game_over.float())
+
+
+def rule_based_policy(obs: Tensor, memory_y: Tensor, rand_val: Tensor,
+                      reaction: float = 0.16, jitter: float = 22.0,
+                      look_ahead: float = 0.14, threshold: float = 8.0,
+                      court_h: _Scalar = COURT_H,
+                      ) -> tuple[Tensor, Tensor]:
+    """Core rule-based AI: obs → action + new_memory.
+    Shared by PongPolicy (ONNX) and RuleBasedAgent (RL training)."""
+    ball_y = obs[1] * court_h
+    ball_vy = obs[3] * BALL_BASE_SPEED
+    own_y = obs[4] * court_h
+    new_memory = ai_track(ball_y, ball_vy, memory_y,
+                          reaction, jitter, look_ahead,
+                          rand_val, court_h=court_h)
+    action = target_to_action(new_memory, own_y, threshold)
+    return action, new_memory
 
 
 def target_to_action(target_y: Tensor, own_y: Tensor,

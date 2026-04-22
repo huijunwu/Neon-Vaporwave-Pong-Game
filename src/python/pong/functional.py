@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import torch
 from torch import Tensor
 
-from pong.rl.types import Timestep
+
+class Timestep(NamedTuple):
+    obs: Tensor          # (n_agents, *obs_shape)
+    reward: Tensor       # (n_agents,)
+    done: Tensor         # (n_agents,)  — bool
+    truncated: Tensor    # (n_agents,)  — bool
+    info: Tensor         # events or scalar 0
 
 
 def split_seed(seed: Tensor, n: int = 2) -> tuple[Tensor, ...]:

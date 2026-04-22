@@ -76,12 +76,12 @@ async update(ts)                                     ← requestAnimationFrame �
 │
 ├─ 处理 events（来自 ONNX 的 float32[6] 标记）
 │   ├─ wallTop/wallBottom:
-│   │   sparkLine(); beep("wall")                     JS（rand + Canvas + Audio）
+│   │   sparkLine(); beep("wall")                    JS（rand + Canvas + Audio）
 │   ├─ hitLeft/hitRight:
-│   │   burst(); sparkLine(); shock()                 JS（rand + Canvas）
-│   │   beep("hit")                                   JS（Audio）
+│   │   burst(); sparkLine(); shock()                JS（rand + Canvas）
+│   │   beep("hit")                                  JS（Audio）
 │   └─ scoredL/scoredR:
-│       handleScore(side, dir)                        JS
+│       handleScore(side, dir)                       JS
 │         score++; rally = 0; burst(); shock()
 │         beep("score")
 │         checkWinOrReset() → resetRound() 或 endGame()
@@ -110,7 +110,7 @@ Watch mode — 无鼠标/球拍控制，仅键盘快捷键
 
 键盘按下
   ├─ Space → start() 或 togglePause()                async
-  ├─ R → hardRestart() (= start 的别名)               async
+  ├─ R → hardRestart() (= start 的别名)              async
   └─ M → toggleSound()                               同步
 
 按钮点击
@@ -129,7 +129,7 @@ Watch mode — 无鼠标/球拍控制，仅键盘快捷键
 ```
 输入层              计算层                                输出层
 ─────────          ─────────                             ─────────
-ball state ───────→ buildObs() → 归一化 obs[6] ─────────→ (JS 变量)
+ball state ───────→ buildObs() → 归一化 obs[6] ────────→ (JS 变量)
 obs + memoryY ────→ ☆ ONNX policy → action + memoryY ──→ (JS 变量)
 obs + memoryY ────→ ☆ ONNX policy → action + memoryY ──→ (JS 变量)
 state + actions ──→ ☆ ONNX step → 新 state + events ───→ ball/paddle → draw()

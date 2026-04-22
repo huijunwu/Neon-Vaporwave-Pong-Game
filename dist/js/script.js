@@ -215,20 +215,31 @@ async function onnxPolicy(obs, memoryY) {
 	return { action: r.action, memoryY: r.new_memory_y };
 }
 
-async function onnxStep(ballX, ballY, ballVx, ballVy,
-                        paddleLY, paddleRY, actionL, actionR, rallyVal) {
+async function onnxStep(actionL, actionR) {
 	const r = await workerRun("step", {
-		ball_x: ballX, ball_y: ballY, ball_vx: ballVx, ball_vy: ballVy,
-		paddle_left_y: paddleLY, paddle_right_y: paddleRY,
+		ball_x: ball.x, ball_y: ball.y, ball_vx: ball.vx, ball_vy: ball.vy,
+		paddle_left_y: paddle.y, paddle_right_y: ai.y,
+		score_left: score.L, score_right: score.R,
+		rally,
 		action_left: actionL, action_right: actionR,
-		rally: rallyVal, W, H
+		rand_angle: Math.random(), rand_dir: Math.random(),
+		W, H
 	});
+	ball.x = r.new_ball_x;
+	ball.y = r.new_ball_y;
+	ball.vx = r.new_ball_vx;
+	ball.vy = r.new_ball_vy;
+	paddle.y = r.new_paddle_left_y;
+	ai.y = r.new_paddle_right_y;
+	score.L = r.new_score_left;
+	score.R = r.new_score_right;
+	rally = r.new_rally;
+	const ev = r.events.data;
 	return {
-		ballX: r.new_ball_x, ballY: r.new_ball_y,
-		ballVx: r.new_ball_vx, ballVy: r.new_ball_vy,
-		paddleLY: r.new_paddle_left_y, paddleRY: r.new_paddle_right_y,
-		rally: r.new_rally,
-		events: r.events.data  // [hitL, hitR, hitTop, hitBot, scoredL, scoredR]
+		hitLeft: ev[0] > 0.5, hitRight: ev[1] > 0.5,
+		wallTop: ev[2] > 0.5, wallBottom: ev[3] > 0.5,
+		scoredL: ev[4] > 0.5, scoredR: ev[5] > 0.5,
+		gameOver: r.game_over > 0.5,
 	};
 }
 
@@ -525,17 +536,7 @@ function start() {
 
 const hardRestart = start;
 
-function checkWinOrReset(nextDir) {
-	if (score.L >= score.toWin) {
-		endGame(true);
-		return;
-	}
-	if (score.R >= score.toWin) {
-		endGame(false);
-		return;
-	}
-	resetRound(nextDir);
-}
+
 
 function endGame(playerWon) {
 	state.running = true;
@@ -716,17 +717,6 @@ function drawParticles() {
 	ctx.globalAlpha = 1;
 }
 
-function handleScore(side, nextDir) {
-	score[side]++;
-	(side === "L" ? sL : sR).textContent = score[side];
-	rally = 0;
-	if (state.fx) {
-		burst(W / 2, H / 2, 10);
-		shock(6);
-	}
-	beep("score");
-	checkWinOrReset(nextDir);
-}
 
 /* ═══════════════════════════════════════════════════════════════════
    Game loop (async — uses ONNX policy + step)
@@ -767,30 +757,14 @@ async function update(ts) {
 	ai_left.memoryY = leftResult.memoryY;
 	ai_right.memoryY = rightResult.memoryY;
 
-	// ── Physics step ← ONNX ──
-	const stepResult = await onnxStep(
-		ball.x, ball.y, ball.vx, ball.vy,
-		paddle.y, ai.y,
-		leftResult.action, rightResult.action,
-		rally
-	);
-	ball.x = stepResult.ballX;
-	ball.y = stepResult.ballY;
-	ball.vx = stepResult.ballVx;
-	ball.vy = stepResult.ballVy;
-	paddle.y = stepResult.paddleLY;
-	ai.y = stepResult.paddleRY;
-	rally = stepResult.rally;
+	// ── Full game step ← ONNX (physics + scoring + auto-serve + game-over) ──
+	const prevScoreL = score.L;
+	const prevScoreR = score.R;
+	const events = await onnxStep(leftResult.action, rightResult.action);
 
-	const ev = stepResult.events;
-	const events = {
-		hitLeft: ev[0] > 0.5,
-		hitRight: ev[1] > 0.5,
-		hitTop: ev[2] > 0.5,
-		hitBottom: ev[3] > 0.5,
-		scoredL: ev[4] > 0.5,
-		scoredR: ev[5] > 0.5
-	};
+	// ── Update DOM scores if changed ──
+	if (score.L !== prevScoreL) sL.textContent = score.L;
+	if (score.R !== prevScoreR) sR.textContent = score.R;
 
 	// ── Trail (JS — render only) ──
 	if (state.fx) {
@@ -800,10 +774,10 @@ async function update(ts) {
 		trail.length = 0;
 	}
 
-	// ── Process events from physics ──
-	if (events.hitTop || events.hitBottom) {
+	// ── Visual/audio effects from events ──
+	if (events.wallTop || events.wallBottom) {
 		if (state.fx)
-			sparkLine(ball.x, ball.y, ball.vx * 0.03, events.hitTop ? 200 : -200, 6);
+			sparkLine(ball.x, ball.y, ball.vx * 0.03, events.wallTop ? 200 : -200, 6);
 		beep("wall");
 	}
 
@@ -816,8 +790,15 @@ async function update(ts) {
 		beep("hit");
 	}
 
-	if (events.scoredR) handleScore("R", -1);
-	if (events.scoredL) handleScore("L", 1);
+	if (events.scoredL || events.scoredR) {
+		if (state.fx) { burst(W / 2, H / 2, 10); shock(6); }
+		beep("score");
+		maybeMatchPointCutscene();
+	}
+
+	if (events.gameOver) {
+		endGame(score.L > score.R);
+	}
 
 	// ── Particles — native JS ──
 	if (state.fx) {

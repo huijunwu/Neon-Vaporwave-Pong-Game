@@ -1,13 +1,11 @@
-"""Smoke test: verify PongEnv + Agents work with torch.compile and torch.vmap."""
+"""Smoke test: verify PongStepModule + PongPolicyModule work with torch.compile and torch.vmap."""
 
 import torch
-from pong.rl.envs.pong import PongEnv, PongState
-from pong.rl.agents.rule_based import RuleBasedAgent, RuleBasedState
-from pong.rl.types import Timestep
+from pong.onnx_modules import PongStepModule, PongPolicyModule, PongState
 
 
 def test_basic_rollout():
-    env = PongEnv()
+    env = PongStepModule()
     seed = torch.tensor(42, dtype=torch.int64)
     state, ts = env.reset(seed)
 
@@ -19,9 +17,9 @@ def test_basic_rollout():
 
 
 def test_multi_agent():
-    env = PongEnv()
-    left = RuleBasedAgent(reaction=0.16)
-    right = RuleBasedAgent(reaction=0.20)
+    env = PongStepModule()
+    left = PongPolicyModule(reaction=0.16)
+    right = PongPolicyModule(reaction=0.20)
 
     seed = torch.tensor(7, dtype=torch.int64)
     state, ts = env.reset(seed)
@@ -37,7 +35,7 @@ def test_multi_agent():
 
 
 def test_vmap_batch():
-    env = PongEnv()
+    env = PongStepModule()
     batch_size = 8
 
     batched_reset = torch.vmap(lambda s: env.reset(s))
@@ -57,9 +55,8 @@ def test_vmap_batch():
 
 
 def test_compile():
-    env = PongEnv()
+    env = PongStepModule()
 
-    # aot_eager validates fullgraph traceability without needing a C++ compiler
     @torch.compile(fullgraph=True, backend="aot_eager")
     def compiled_step(state: PongState, actions: torch.Tensor):
         return env.step(state, actions)
@@ -75,7 +72,7 @@ def test_compile():
 
 
 def test_compile_plus_vmap():
-    env = PongEnv()
+    env = PongStepModule()
     batch_size = 16
 
     batched_step = torch.vmap(lambda s, a: env.step(s, a))
@@ -98,7 +95,7 @@ def test_compile_plus_vmap():
 if __name__ == "__main__":
     tests = [
         ("Basic rollout", test_basic_rollout),
-        ("Multi-agent (2 RuleBasedAgents)", test_multi_agent),
+        ("Multi-agent (2 PongPolicyModules)", test_multi_agent),
         ("vmap batched environments", test_vmap_batch),
         ("torch.compile", test_compile),
         ("compile + vmap combined", test_compile_plus_vmap),
