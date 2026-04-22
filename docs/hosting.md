@@ -57,24 +57,22 @@ npx http-server dist -p 8080
 
 ```
 dist/
-├── index.html          入口页面
-├── script.js           游戏主线程逻辑
-├── onnx-worker.mjs     ONNX 推理 Worker（ES module）
-├── style.css           样式
-├── package.json        npm 依赖（onnxruntime-web）
-├── assets/             图片资源
-│   ├── codepong-title.png
-│   └── codepong26.png
-├── node_modules/       npm install 后生成（.gitignore）
-│   └── onnxruntime-web/  WASM 运行时 + ONNX Runtime
-└── onnx/               ONNX 模型（7 个）
-    ├── pong_clamp.onnx
-    ├── pong_lerp.onnx
-    ├── pong_shock.onnx
-    ├── pong_ai.onnx
-    ├── pong_physics.onnx
-    ├── pong_cutscene.onnx
-    └── pong_particles.onnx
+├── index.html                  入口页面
+├── js/
+│   ├── script.js               主线程游戏逻辑
+│   └── onnx-worker.mjs         ONNX 推理 Worker（ES module）
+├── css/
+│   └── style.css               样式
+├── package.json                npm 依赖（onnxruntime-web）
+├── assets/
+│   ├── images/                 图片资源
+│   │   ├── codepong-title.png
+│   │   └── codepong26.png
+│   └── onnx/                   ONNX 模型（2 个）
+│       ├── pong_step.onnx      物理引擎
+│       └── pong_policy.onnx    AI 决策
+└── node_modules/               npm install 后生成（.gitignore）
+    └── onnxruntime-web/        WASM 运行时 + ONNX Runtime
 ```
 
 `onnxruntime-web` 通过 npm 安装到本地 `node_modules/`，Worker 以 ES module 方式 import。
