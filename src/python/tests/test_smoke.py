@@ -1,7 +1,8 @@
 """Smoke test: verify PongStepModule + PongPolicyModule work with torch.compile and torch.vmap."""
 
 import torch
-from pong.onnx_modules import PongStepModule, PongPolicyModule, PongState
+from codepong26.step_module import PongStepModule, PongState
+from codepong26.policy_module import PongPolicyModule
 
 
 def test_basic_rollout():

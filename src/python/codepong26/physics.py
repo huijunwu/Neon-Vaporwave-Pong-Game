@@ -147,7 +147,7 @@ def serve_ball_from_seed(seed: Tensor, court_w: _Scalar = COURT_W,
                          ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Deterministic ball serve from a seed (for RL training).
     Returns (bx, by, bvx, bvy, new_seed)."""
-    from pong.functional import split_seed, manual_uniform
+    from codepong26.functional import split_seed, manual_uniform
     s1, s2, s3 = split_seed(seed, 3)
     bx, by, bvx, bvy = serve_ball_from_rand(
         manual_uniform(s1), manual_uniform(s2), court_w, court_h,

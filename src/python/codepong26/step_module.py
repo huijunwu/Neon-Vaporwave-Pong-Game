@@ -1,10 +1,8 @@
 """
-ONNX-first game modules — each class is a complete component:
-  forward() → exported to ONNX (flat scalars for JS)
-  reset/step/act → Python-only (RL training with structured types)
+PongStepModule — Pong environment as nn.Module.
 
-  PongStepModule  → pong_step.onnx   (env: physics + scoring + serve + game-over)
-  PongPolicyModule → pong_policy.onnx (agent: rule-based, swappable for NN)
+  forward() → exported to ONNX as pong_step.onnx (JS calls this)
+  reset/step/reset_done → Python-only (RL training)
 """
 
 from __future__ import annotations
@@ -15,11 +13,11 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from pong.physics import (
+from codepong26.physics import (
     COURT_W, COURT_H, BALL_BASE_SPEED,
-    full_step, rule_based_policy, serve_ball_from_seed,
+    full_step, serve_ball_from_seed,
 )
-from pong.functional import Timestep, split_seed, manual_uniform
+from codepong26.functional import Timestep, split_seed, manual_uniform
 
 
 class PongState(NamedTuple):
@@ -35,13 +33,6 @@ class PongState(NamedTuple):
     step_count: Tensor
     seed: Tensor
 
-
-class PolicyState(NamedTuple):
-    memory_y: Tensor
-    seed: Tensor
-
-
-# ── Helpers ──
 
 def _get_obs(state: PongState) -> Tensor:
     shared = torch.stack([
@@ -61,16 +52,7 @@ def _get_obs(state: PongState) -> Tensor:
     return torch.stack([left_obs, right_obs])
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  PongStepModule — env (ONNX + RL)
-# ═══════════════════════════════════════════════════════════════════
-
 class PongStepModule(nn.Module):
-    """Pong environment as nn.Module.
-
-    forward() → ONNX export (flat scalars, JS calls this)
-    reset/step/reset_done → Python-only (RL training)
-    """
 
     n_agents = 2
     obs_dim = 6
@@ -164,53 +146,5 @@ class PongStepModule(nn.Module):
 
     def reset_done(self, state: PongState, timestep: Timestep,
                    seed: Tensor) -> tuple[PongState, Timestep]:
-        from pong.functional import auto_reset
+        from codepong26.functional import auto_reset
         return auto_reset(self, state, timestep, seed)
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  PongPolicyModule — agent (ONNX + RL)
-# ═══════════════════════════════════════════════════════════════════
-
-class PongPolicyModule(nn.Module):
-    """Rule-based agent as nn.Module.
-
-    forward() → ONNX export (flat scalars, JS calls this)
-    act/initial_state → Python-only (RL training)
-    """
-
-    def __init__(self, reaction: float = 0.16,
-                 jitter: float = 22.0, look_ahead: float = 0.14,
-                 threshold: float = 8.0):
-        super().__init__()
-        self.reaction = reaction
-        self.jitter = jitter
-        self.look_ahead = look_ahead
-        self.threshold = threshold
-
-    def forward(self, obs, memory_y, rand_val, H):
-        """ONNX-exported: obs → action + new_memory."""
-        return rule_based_policy(
-            obs, memory_y, rand_val,
-            self.reaction, self.jitter, self.look_ahead, self.threshold,
-            court_h=H,
-        )
-
-    def initial_state(self, seed: Tensor) -> PolicyState:
-        return PolicyState(
-            memory_y=torch.tensor(COURT_H / 2.0),
-            seed=seed,
-        )
-
-    def act(self, obs: Tensor, state: PolicyState | None = None) -> tuple[Tensor, PolicyState]:
-        """Python-only: RL-friendly wrapper with seed-based RNG."""
-        if state is None:
-            state = self.initial_state(torch.tensor(0, dtype=torch.int64))
-
-        s1, s2 = split_seed(state.seed)
-        rand_val = manual_uniform(s1) * 2.0 - 1.0
-
-        action, new_memory = self.forward(
-            obs, state.memory_y, rand_val, torch.tensor(COURT_H),
-        )
-        return action, PolicyState(memory_y=new_memory, seed=s2)
