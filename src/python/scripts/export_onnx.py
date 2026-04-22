@@ -11,7 +11,7 @@ Output:  dist/assets/onnx/pong_step.onnx, pong_policy.onnx
 
 import os
 import torch
-from pong.onnx_modules import PongStep, PongPolicy
+from pong.onnx_modules import PongStepModule, PongPolicyModule
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "dist", "assets", "onnx")
 OPSET = 17
@@ -31,7 +31,7 @@ def _export(model, args, filename, input_names, output_names):
 
 def export_step():
     _export(
-        PongStep(),
+        PongStepModule(),
         (
             torch.tensor(400.0),    # ball_x
             torch.tensor(300.0),    # ball_y
@@ -39,26 +39,35 @@ def export_step():
             torch.tensor(200.0),    # ball_vy
             torch.tensor(300.0),    # paddle_left_y
             torch.tensor(300.0),    # paddle_right_y
+            torch.tensor(0.0),      # score_left
+            torch.tensor(0.0),      # score_right
+            torch.tensor(5.0),      # rally
             torch.tensor(0.0),      # action_left (float32)
             torch.tensor(1.0),      # action_right (float32)
-            torch.tensor(5.0),      # rally
+            torch.tensor(0.5),      # rand_angle
+            torch.tensor(0.7),      # rand_dir
             torch.tensor(800.0),    # W
             torch.tensor(600.0),    # H
         ),
         "pong_step.onnx",
         ["ball_x", "ball_y", "ball_vx", "ball_vy",
          "paddle_left_y", "paddle_right_y",
+         "score_left", "score_right",
+         "rally",
          "action_left", "action_right",
-         "rally", "W", "H"],
+         "rand_angle", "rand_dir",
+         "W", "H"],
         ["new_ball_x", "new_ball_y", "new_ball_vx", "new_ball_vy",
          "new_paddle_left_y", "new_paddle_right_y",
-         "new_rally", "events"],
+         "new_score_left", "new_score_right",
+         "new_rally",
+         "events", "game_over"],
     )
 
 
 def export_policy():
     _export(
-        PongPolicy(),
+        PongPolicyModule(),
         (
             torch.tensor([0.5, 0.5, -0.5, 0.2, 0.5, 0.5]),  # obs[6]
             torch.tensor(300.0),                                # memory_y
