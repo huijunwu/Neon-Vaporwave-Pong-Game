@@ -11,7 +11,8 @@ Output:  dist/assets/onnx/pong_step.onnx, pong_policy.onnx
 
 import os
 import torch
-from pong.onnx_modules import PongStepModule, PongPolicyModule
+from codepong26.step_module import PongStepModule
+from codepong26.policy_module import PongPolicyModule
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "dist", "assets", "onnx")
 OPSET = 17
