@@ -46,57 +46,64 @@ def wall_collide(by: Tensor, bvy: Tensor,
     return by, bvy, hit_top, hit_bottom
 
 
-def paddle_collide(bx: Tensor, by: Tensor, bvx: Tensor, bvy: Tensor,
+def paddle_collide(old_bx: Tensor, bx: Tensor, by: Tensor,
+                   bvx: Tensor, bvy: Tensor,
                    paddle_y: Tensor, paddle_x: _Scalar, rally: Tensor,
                    going_left: bool,
                    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    """Symmetric paddle collision.
+    """Sweep test paddle collision — prevents tunneling at high speeds.
 
-    going_left=True  → left paddle  (ball moving left,  deflect rightward)
-    going_left=False → right paddle (ball moving right, deflect leftward)
+    Checks if ball crossed the paddle x-plane between old_bx and bx,
+    and if the y position at crossing time is within paddle range.
     """
-    if going_left:
-        hit = (
-            (bvx < 0)
-            & ((bx - BALL_R) <= (paddle_x + PADDLE_W / 2.0))
-            & (by >= paddle_y - PADDLE_H / 2.0)
-            & (by <= paddle_y + PADDLE_H / 2.0)
-        )
-    else:
-        hit = (
-            (bvx > 0)
-            & ((bx + BALL_R) >= (paddle_x - PADDLE_W / 2.0))
-            & (by >= paddle_y - PADDLE_H / 2.0)
-            & (by <= paddle_y + PADDLE_H / 2.0)
-        )
+    paddle_face = paddle_x + PADDLE_W / 2.0 if going_left else paddle_x - PADDLE_W / 2.0
 
-    n = (by - paddle_y) / (PADDLE_H / 2.0)
-    angle = n * 0.95
+    if going_left:
+        # Ball moving left: crossed if old_bx - R > face and bx - R <= face
+        old_edge = old_bx - BALL_R
+        new_edge = bx - BALL_R
+        crossed = (old_edge > paddle_face) & (new_edge <= paddle_face)
+    else:
+        # Ball moving right: crossed if old_bx + R < face and bx + R >= face
+        old_edge = old_bx + BALL_R
+        new_edge = bx + BALL_R
+        crossed = (old_edge < paddle_face) & (new_edge >= paddle_face)
+
+    # Interpolate y at crossing time: t = (face - old_edge) / (new_edge - old_edge)
+    dx = (new_edge - old_edge)
+    t_cross = torch.where(dx.abs() > 1e-6, (paddle_face - old_edge) / dx, torch.tensor(0.5))
+    t_cross = torch.clamp(t_cross, 0.0, 1.0)
+    old_by = by - bvy * (1.0 / 60.0)
+    y_at_cross = old_by + (by - old_by) * t_cross
+
+    in_paddle = (y_at_cross >= paddle_y - PADDLE_H / 2.0) & (y_at_cross <= paddle_y + PADDLE_H / 2.0)
+    hit = crossed & in_paddle
+
+    # Classic Pong: fixed vx, vy linear to hit position. Mild rally speedup (+2%/hit).
+    MAX_VY = BALL_BASE_SPEED * 0.75
+    n = (y_at_cross - paddle_y) / (PADDLE_H / 2.0)
     new_rally = rally + 1.0
-    speed = BALL_BASE_SPEED + new_rally * 15.0
+    speed_mult = 1.0 + new_rally * 0.02
+    new_vx = BALL_BASE_SPEED * speed_mult
+    new_vy = n * MAX_VY * speed_mult
 
-    raw_vx = speed * torch.cos(angle)
-    raw_vy = speed * torch.sin(angle)
-    mag = torch.sqrt(raw_vx * raw_vx + raw_vy * raw_vy).clamp(min=1.0)
-    norm_vx = (raw_vx / mag) * speed
-    norm_vy = (raw_vy / mag) * speed
-
+    # Place ball exactly at paddle face (no penetration)
     if going_left:
-        new_bx = torch.where(hit, torch.tensor(paddle_x + PADDLE_W / 2.0 + BALL_R), bx)
-        new_bvx = torch.where(hit, torch.abs(norm_vx), bvx)
+        new_bx = torch.where(hit, torch.tensor(paddle_face + BALL_R), bx)
+        new_bvx = torch.where(hit, new_vx, bvx)
     else:
-        new_bx = torch.where(hit, torch.tensor(paddle_x - PADDLE_W / 2.0 - BALL_R), bx)
-        new_bvx = torch.where(hit, -torch.abs(norm_vx), bvx)
+        new_bx = torch.where(hit, torch.tensor(paddle_face - BALL_R), bx)
+        new_bvx = torch.where(hit, -new_vx, bvx)
 
-    new_bvy = torch.where(hit, norm_vy, bvy)
+    new_bvy = torch.where(hit, new_vy, bvy)
     new_rally = torch.where(hit, new_rally, rally)
 
     return new_bx, new_bvx, new_bvy, new_rally, hit
 
 
 def score_detect(bx: Tensor, w: float = COURT_W) -> tuple[Tensor, Tensor]:
-    scored_left = bx > w + 60.0
-    scored_right = bx < -60.0
+    scored_left = bx > w
+    scored_right = bx < 0.0
     return scored_left, scored_right
 
 
@@ -133,9 +140,10 @@ def serve_ball_from_rand(rand_angle: Tensor, rand_dir: Tensor,
     """Ball serve from random values (provided by caller).
     rand_angle: uniform [0,1), rand_dir: uniform [0,1).
     Returns (bx, by, bvx, bvy)."""
-    angle = (rand_angle - 0.5) * 1.2
+    # Classic Pong: fixed vx, small random vy (consistent with paddle_collide)
+    angle = (rand_angle - 0.5) * 0.52
     direction = torch.where(rand_dir > 0.5, torch.tensor(1.0), torch.tensor(-1.0))
-    bvx = direction * BALL_BASE_SPEED * torch.cos(angle)
+    bvx = direction * BALL_BASE_SPEED
     bvy = BALL_BASE_SPEED * torch.sin(angle)
     cx = court_w / 2.0 if isinstance(court_w, Tensor) else torch.tensor(court_w / 2.0)
     cy = court_h / 2.0 if isinstance(court_h, Tensor) else torch.tensor(court_h / 2.0)
@@ -184,10 +192,10 @@ def full_step(ball_x: Tensor, ball_y: Tensor, ball_vx: Tensor, ball_vy: Tensor,
     by, bvy, hit_top, hit_bottom = wall_collide(by, bvy, h=court_h)
 
     bx, bvx, bvy, new_rally, hit_left = paddle_collide(
-        bx, by, bvx, bvy, new_left_y, PADDLE_INSET, rally, going_left=True,
+        ball_x, bx, by, bvx, bvy, new_left_y, PADDLE_INSET, rally, going_left=True,
     )
     bx, bvx, bvy, new_rally, hit_right = paddle_collide(
-        bx, by, bvx, bvy, new_right_y, court_w - PADDLE_INSET, new_rally, going_left=False,
+        ball_x, bx, by, bvx, bvy, new_right_y, court_w - PADDLE_INSET, new_rally, going_left=False,
     )
 
     scored_left, scored_right = score_detect(bx, w=court_w)
