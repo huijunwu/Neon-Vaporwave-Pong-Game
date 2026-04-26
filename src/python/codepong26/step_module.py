@@ -77,25 +77,26 @@ class PongStepModule(nn.Module):
         )
 
     def reset(self, seed: Tensor) -> tuple[PongState, Timestep]:
+        device = seed.device
         s1, s2 = split_seed(seed, 2)
         bx, by, bvx, bvy, s_next = serve_ball_from_seed(s1, COURT_W, COURT_H)
 
         state = PongState(
             ball_x=bx, ball_y=by, ball_vx=bvx, ball_vy=bvy,
-            paddle_left_y=torch.tensor(COURT_H / 2.0),
-            paddle_right_y=torch.tensor(COURT_H / 2.0),
-            score_left=torch.tensor(0.0),
-            score_right=torch.tensor(0.0),
-            rally=torch.tensor(0.0),
-            step_count=torch.tensor(0.0),
+            paddle_left_y=torch.tensor(COURT_H / 2.0, device=device),
+            paddle_right_y=torch.tensor(COURT_H / 2.0, device=device),
+            score_left=torch.tensor(0.0, device=device),
+            score_right=torch.tensor(0.0, device=device),
+            rally=torch.tensor(0.0, device=device),
+            step_count=torch.tensor(0.0, device=device),
             seed=s_next,
         )
         return state, Timestep(
             obs=_get_obs(state),
-            reward=torch.zeros(2),
-            done=torch.zeros(2, dtype=torch.bool),
-            truncated=torch.zeros(2, dtype=torch.bool),
-            info=torch.tensor(0.0),
+            reward=torch.zeros(2, device=device),
+            done=torch.zeros(2, dtype=torch.bool, device=device),
+            truncated=torch.zeros(2, dtype=torch.bool, device=device),
+            info=torch.tensor(0.0, device=device),
         )
 
     def step(self, state: PongState, actions: Tensor) -> tuple[PongState, Timestep]:

@@ -10,12 +10,29 @@ All functions are pure tensor ops, torch.where for branching.
 
 from typing import Union
 
+import hashlib
+import os
 import torch
 from torch import Tensor
 
 _Scalar = Union[float, Tensor]
 
 COURT_W = 800.0
+
+PHYSICS_VERSION = "1.0.0"
+
+def get_physics_version() -> str:
+    version_file = os.path.join(os.path.dirname(__file__), "version.txt")
+    if os.path.exists(version_file):
+        with open(version_file) as f:
+            return f.read().strip()
+    return PHYSICS_VERSION
+
+def get_physics_hash() -> str:
+    with open(__file__, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()[:8]
+
+
 COURT_H = 600.0
 PADDLE_W = 14.0
 PADDLE_H = 110.0
