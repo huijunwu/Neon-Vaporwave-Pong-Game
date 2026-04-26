@@ -79,6 +79,50 @@
 	</main>
 </div>
     <script src="./js/script.js"></script>
+    <script>
+    // Auto-start for streaming: automatically start game when page loads
+    (function autoStart() {
+        let attempts = 0;
+        const maxAttempts = 30;
+        
+        const tryStart = () => {
+            attempts++;
+            
+            // Check if game is ready and not running
+            if (typeof state !== 'undefined' && !state.running && typeof start === 'function') {
+                console.log('[auto-start] Starting game...');
+                start();
+                return true;
+            }
+            
+            // Also try clicking overlay if visible
+            const overlay = document.getElementById('overlay');
+            if (overlay && !overlay.classList.contains('hidden')) {
+                const panel = overlay.querySelector('.panel');
+                if (panel) {
+                    console.log('[auto-start] Clicking overlay panel...');
+                    panel.click();
+                }
+            }
+            
+            // Continue trying if not started yet
+            if (attempts < maxAttempts) {
+                setTimeout(tryStart, 500);
+            } else {
+                console.log('[auto-start] Max attempts reached, game may already be running');
+            }
+            
+            return false;
+        };
+        
+        // Start checking after a short delay to let script.js initialize
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => setTimeout(tryStart, 1000));
+        } else {
+            setTimeout(tryStart, 1000);
+        }
+    })();
+    </script>
 
   </body>
   
