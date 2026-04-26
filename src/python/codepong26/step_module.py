@@ -35,19 +35,24 @@ class PongState(NamedTuple):
 
 
 def _get_obs(state: PongState) -> Tensor:
+    device = state.ball_x.device
+    court_w = torch.tensor(COURT_W, device=device)
+    court_h = torch.tensor(COURT_H, device=device)
+    ball_speed = torch.tensor(BALL_BASE_SPEED, device=device)
     shared = torch.stack([
-        state.ball_x / COURT_W,
-        state.ball_y / COURT_H,
-        state.ball_vx / BALL_BASE_SPEED,
-        state.ball_vy / BALL_BASE_SPEED,
+        state.ball_x / court_w,
+        state.ball_y / court_h,
+        state.ball_vx / ball_speed,
+        state.ball_vy / ball_speed,
     ])
+    court_h_tensor = torch.tensor(COURT_H, device=device)
     left_obs = torch.cat([shared, torch.stack([
-        state.paddle_left_y / COURT_H,
-        state.paddle_right_y / COURT_H,
+        state.paddle_left_y / court_h_tensor,
+        state.paddle_right_y / court_h_tensor,
     ])])
     right_obs = torch.cat([shared, torch.stack([
-        state.paddle_right_y / COURT_H,
-        state.paddle_left_y / COURT_H,
+        state.paddle_right_y / court_h_tensor,
+        state.paddle_left_y / court_h_tensor,
     ])])
     return torch.stack([left_obs, right_obs])
 
@@ -110,6 +115,7 @@ class PongStepModule(nn.Module):
         rand_angle = manual_uniform(s1)
         rand_dir = manual_uniform(s2)
 
+        device = state.ball_x.device
         (bx, by, bvx, bvy,
          new_left_y, new_right_y,
          new_score_left, new_score_right,
@@ -121,7 +127,7 @@ class PongStepModule(nn.Module):
             state.rally,
             actions[0], actions[1],
             rand_angle, rand_dir,
-            torch.tensor(COURT_W), torch.tensor(COURT_H),
+            torch.tensor(COURT_W, device=device), torch.tensor(COURT_H, device=device),
         )
 
         scored_any = (events[4] > 0.5) | (events[5] > 0.5)
@@ -146,7 +152,7 @@ class PongStepModule(nn.Module):
                 scored_right.float() - scored_left.float(),
             ]),
             done=torch.stack([game_over > 0.5, game_over > 0.5]),
-            truncated=torch.zeros(2, dtype=torch.bool),
+            truncated=torch.zeros(2, dtype=torch.bool, device=device),
             info=events,
         )
 
