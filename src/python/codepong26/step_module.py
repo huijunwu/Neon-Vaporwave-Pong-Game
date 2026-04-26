@@ -80,6 +80,11 @@ class PongStepModule(nn.Module):
         device = seed.device
         s1, s2 = split_seed(seed, 2)
         bx, by, bvx, bvy, s_next = serve_ball_from_seed(s1, COURT_W, COURT_H)
+        bx = bx.to(device)
+        by = by.to(device)
+        bvx = bvx.to(device)
+        bvy = bvy.to(device)
+        s_next = s_next.to(device)
 
         state = PongState(
             ball_x=bx, ball_y=by, ball_vx=bvx, ball_vy=bvy,
