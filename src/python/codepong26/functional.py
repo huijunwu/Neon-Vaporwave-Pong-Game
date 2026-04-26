@@ -29,18 +29,19 @@ def manual_uniform(seed: Tensor, shape: tuple[int, ...] = ()) -> Tensor:
     Uses a simple LCG. Good enough for jitter/noise in game envs.
     NOT cryptographically secure. vmap-safe because it's pure tensor math.
     """
+    device = seed.device
     s = seed.to(torch.int64)
     flat_n = 1
     for d in shape:
         flat_n *= d
     if flat_n == 0:
-        return torch.zeros(shape)
+        return torch.zeros(shape, device=device)
     values = []
     for _ in range(flat_n):
         s = (s * 6364136223846793005 + 1442695040888963407) % (2**63)
         values.append(s)
     t = torch.stack(values).float() / (2**63)
-    return t.reshape(shape) if shape else t.squeeze()
+    return t.reshape(shape).to(device) if shape else t.squeeze().to(device)
 
 
 def auto_reset(
