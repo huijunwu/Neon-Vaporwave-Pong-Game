@@ -208,9 +208,7 @@ function buildObs(isLeft) {
 async function onnxPolicy(obs, memoryY) {
 	const r = await workerRun("policy_nn", {
 		obs: { data: Float32Array.from(obs), dims: [6] },
-		memory_y: memoryY,
-		rand_val: Math.random() * 2 - 1,
-		H
+		memory_y: memoryY
 	});
 	return { action: r.action, memoryY: r.new_memory_y };
 }
