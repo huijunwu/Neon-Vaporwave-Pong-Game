@@ -6,7 +6,7 @@ Usage:
     pip install -e .
     python scripts/export_onnx.py
 
-Output:  dist/assets/onnx/pong_step.onnx, pong_policy.onnx
+Output:  dist/assets/onnx/pong_step.onnx, pong_policy_rule_based.onnx
 """
 
 import os
@@ -75,7 +75,7 @@ def export_policy():
             torch.tensor(0.3),                                  # rand_val
             torch.tensor(600.0),                                # H
         ),
-        "pong_policy.onnx",
+        "pong_policy_rule_based.onnx",
         ["obs", "memory_y", "rand_val", "H"],
         ["action", "new_memory_y"],
     )
