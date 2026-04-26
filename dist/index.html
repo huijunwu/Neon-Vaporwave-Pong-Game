@@ -111,7 +111,7 @@
             
             // Continue trying if not started yet
             if (attempts < maxAttempts) {
-                setTimeout(tryStart, 500);
+                setTimeout(tryStart, 5000);
             } else {
                 console.log('[auto-start] Max attempts reached, game may already be running');
                 gameStarted = true;
@@ -141,18 +141,18 @@
             }
             
             // Check periodically
-            setTimeout(autoRestart, 1000);
+            setTimeout(autoRestart, 5000);
         };
         
         // Start checking after a short delay to let script.js initialize
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => {
-                setTimeout(tryStart, 1000);
-                setTimeout(autoRestart, 3000); // Start auto-restart check after 3s
+                setTimeout(tryStart, 5000);
+                setTimeout(autoRestart, 5000); // Start auto-restart check after 5s
             });
         } else {
-            setTimeout(tryStart, 1000);
-            setTimeout(autoRestart, 3000);
+            setTimeout(tryStart, 5000);
+            setTimeout(autoRestart, 5000);
         }
     })();
     </script>
