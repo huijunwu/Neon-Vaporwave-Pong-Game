@@ -73,6 +73,7 @@ def paddle_collide(old_bx: Tensor, bx: Tensor, by: Tensor,
     Checks if ball crossed the paddle x-plane between old_bx and bx,
     and if the y position at crossing time is within paddle range.
     """
+    device = bx.device
     paddle_face = paddle_x + PADDLE_W / 2.0 if going_left else paddle_x - PADDLE_W / 2.0
 
     if going_left:
@@ -88,7 +89,7 @@ def paddle_collide(old_bx: Tensor, bx: Tensor, by: Tensor,
 
     # Interpolate y at crossing time: t = (face - old_edge) / (new_edge - old_edge)
     dx = (new_edge - old_edge)
-    t_cross = torch.where(dx.abs() > 1e-6, (paddle_face - old_edge) / dx, torch.tensor(0.5))
+    t_cross = torch.where(dx.abs() > 1e-6, (paddle_face - old_edge) / dx, torch.tensor(0.5, device=device))
     t_cross = torch.clamp(t_cross, 0.0, 1.0)
     old_by = by - bvy * (1.0 / 60.0)
     y_at_cross = old_by + (by - old_by) * t_cross
@@ -106,10 +107,10 @@ def paddle_collide(old_bx: Tensor, bx: Tensor, by: Tensor,
 
     # Place ball exactly at paddle face (no penetration)
     if going_left:
-        new_bx = torch.where(hit, torch.tensor(paddle_face + BALL_R), bx)
+        new_bx = torch.where(hit, torch.tensor(paddle_face + BALL_R, device=device), bx)
         new_bvx = torch.where(hit, new_vx, bvx)
     else:
-        new_bx = torch.where(hit, torch.tensor(paddle_face - BALL_R), bx)
+        new_bx = torch.where(hit, torch.tensor(paddle_face - BALL_R, device=device), bx)
         new_bvx = torch.where(hit, -new_vx, bvx)
 
     new_bvy = torch.where(hit, new_vy, bvy)
@@ -146,7 +147,7 @@ def ai_track(ball_y: Tensor, ball_vy: Tensor,
     target = ball_y + ball_vy * look_ahead + rand_val * jitter
     target = torch.clamp(target, 60.0, court_h - 60.0)
 
-    t = 1.0 - torch.pow(torch.tensor(0.0006), dt / reaction)
+    t = 1.0 - torch.pow(torch.tensor(0.0006, device=memory_y.device), dt / reaction)
     return memory_y + (target - memory_y) * t
 
 
@@ -158,12 +159,19 @@ def serve_ball_from_rand(rand_angle: Tensor, rand_dir: Tensor,
     rand_angle: uniform [0,1), rand_dir: uniform [0,1).
     Returns (bx, by, bvx, bvy)."""
     # Classic Pong: fixed vx, small random vy (consistent with paddle_collide)
+    device = rand_angle.device
     angle = (rand_angle - 0.5) * 0.52
-    direction = torch.where(rand_dir > 0.5, torch.tensor(1.0), torch.tensor(-1.0))
+    direction = torch.where(rand_dir > 0.5, torch.tensor(1.0, device=device), torch.tensor(-1.0, device=device))
     bvx = direction * BALL_BASE_SPEED
     bvy = BALL_BASE_SPEED * torch.sin(angle)
-    cx = court_w / 2.0 if isinstance(court_w, Tensor) else torch.tensor(court_w / 2.0)
-    cy = court_h / 2.0 if isinstance(court_h, Tensor) else torch.tensor(court_h / 2.0)
+    if isinstance(court_w, Tensor):
+        cx = court_w / 2.0
+    else:
+        cx = torch.tensor(court_w / 2.0, device=device)
+    if isinstance(court_h, Tensor):
+        cy = court_h / 2.0
+    else:
+        cy = torch.tensor(court_h / 2.0, device=device)
     return cx, cy, bvx, bvy
 
 
@@ -225,11 +233,12 @@ def full_step(ball_x: Tensor, ball_y: Tensor, ball_vx: Tensor, ball_vy: Tensor,
     serve_bx, serve_by, serve_bvx, serve_bvy = serve_ball_from_rand(
         rand_angle, rand_dir, court_w, court_h,
     )
+    device = bx.device
     bx = torch.where(scored_any, serve_bx, bx)
     by = torch.where(scored_any, serve_by, by)
     bvx = torch.where(scored_any, serve_bvx, bvx)
     bvy = torch.where(scored_any, serve_bvy, bvy)
-    new_rally = torch.where(scored_any, torch.tensor(0.0), new_rally)
+    new_rally = torch.where(scored_any, torch.tensor(0.0, device=device), new_rally)
 
     game_over = (new_score_left >= MAX_SCORE) | (new_score_right >= MAX_SCORE)
 
@@ -266,13 +275,14 @@ def rule_based_policy(obs: Tensor, memory_y: Tensor, rand_val: Tensor,
 def target_to_action(target_y: Tensor, own_y: Tensor,
                      threshold: float = 8.0) -> Tensor:
     """Convert continuous target_y to discrete action (float32): 0=NOOP, 1=DOWN(Y+), 2=UP(Y-)."""
+    device = target_y.device
     diff = target_y - own_y
     return torch.where(
         diff > threshold,
-        torch.tensor(1.0),
+        torch.tensor(1.0, device=device),
         torch.where(
             diff < -threshold,
-            torch.tensor(2.0),
-            torch.tensor(0.0),
+            torch.tensor(2.0, device=device),
+            torch.tensor(0.0, device=device),
         ),
     )

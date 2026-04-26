@@ -111,11 +111,11 @@ class PongStepModule(nn.Module):
 
     def step(self, state: PongState, actions: Tensor) -> tuple[PongState, Timestep]:
         """Python-only: structured step for RL training."""
+        device = state.ball_x.device
         s1, s2, s_next = split_seed(state.seed, 3)
         rand_angle = manual_uniform(s1)
         rand_dir = manual_uniform(s2)
 
-        device = state.ball_x.device
         (bx, by, bvx, bvy,
          new_left_y, new_right_y,
          new_score_left, new_score_right,
