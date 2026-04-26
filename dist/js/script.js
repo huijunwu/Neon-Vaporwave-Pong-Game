@@ -35,7 +35,7 @@ function workerInit() {
 		worker.postMessage({
 			type: "init",
 			base: "/assets/onnx/",
-			models: ["step", "policy"]
+			models: ["step", "policy_nn"]
 		});
 	});
 }
@@ -206,7 +206,7 @@ function buildObs(isLeft) {
 }
 
 async function onnxPolicy(obs, memoryY) {
-	const r = await workerRun("policy", {
+	const r = await workerRun("policy_nn", {
 		obs: { data: Float32Array.from(obs), dims: [6] },
 		memory_y: memoryY,
 		rand_val: Math.random() * 2 - 1,
