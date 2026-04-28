@@ -87,7 +87,7 @@ const state = {
 	running: false,
 	paused: false,
 	fx: true,
-	sound: false,
+	sound: true,
 	time: 0,
 	shake: 0,
 	cut: false,
