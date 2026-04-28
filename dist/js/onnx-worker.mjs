@@ -19,7 +19,8 @@ const handlers = {
 	async init({ base, models }) {
 		for (const name of models) {
 			sessions[name] = await ort.InferenceSession.create(
-				base + "pong_" + name + ".onnx"
+				base + "pong_" + name + ".onnx",
+				{ executionProviders: ["wasm"] }
 			);
 		}
 		self.postMessage({ type: "ready" });
