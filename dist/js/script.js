@@ -201,7 +201,7 @@ function buildObs(isLeft) {
 	if (isLeft) {
 		return [ball.x / W2, ball.y / H2, ball.vx / S, ball.vy / S, paddle.y / H2, ai.y / H2];
 	} else {
-		return [ball.x / W2, ball.y / H2, ball.vx / S, ball.vy / S, ai.y / H2, paddle.y / H2];
+		return [(W2 - ball.x) / W2, ball.y / H2, -ball.vx / S, ball.vy / S, ai.y / H2, paddle.y / H2];
 	}
 }
 

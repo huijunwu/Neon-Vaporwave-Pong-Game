@@ -45,12 +45,18 @@ def _get_obs(state: PongState) -> Tensor:
         state.ball_vx / ball_speed,
         state.ball_vy / ball_speed,
     ])
+    shared_mirrored = torch.stack([
+        (court_w - state.ball_x) / court_w,
+        state.ball_y / court_h,
+        -state.ball_vx / ball_speed,
+        state.ball_vy / ball_speed,
+    ])
     court_h_tensor = torch.tensor(COURT_H, device=device)
     left_obs = torch.cat([shared, torch.stack([
         state.paddle_left_y / court_h_tensor,
         state.paddle_right_y / court_h_tensor,
     ])])
-    right_obs = torch.cat([shared, torch.stack([
+    right_obs = torch.cat([shared_mirrored, torch.stack([
         state.paddle_right_y / court_h_tensor,
         state.paddle_left_y / court_h_tensor,
     ])])
