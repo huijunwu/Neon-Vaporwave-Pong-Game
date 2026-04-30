@@ -165,11 +165,6 @@ function applyFrame(f) {
 	ball.y   = f.ball_y * sy;
 	paddle.y = f.paddle_left_y  * sy;
 	ai.y     = f.paddle_right_y * sy;
-	paddle.w = 14  * sx;  paddle.h = 110 * sy;
-	ai.w     = 14  * sx;  ai.h     = 110 * sy;
-	ball.r   = 10  * sx;
-	paddle.inset = 26 * sx;
-	ai.inset     = 26 * sx;
 	if (f.score_l !== score.L) { score.L = f.score_l; sL.textContent = score.L; }
 	if (f.score_r !== score.R) { score.R = f.score_r; sR.textContent = score.R; }
 	rally = f.rally;
