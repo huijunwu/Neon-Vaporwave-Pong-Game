@@ -17,7 +17,7 @@ from torch import Tensor
 
 _Scalar = Union[float, Tensor]
 
-COURT_W = 800.0
+COURT_W = 1888.0
 
 PHYSICS_VERSION = "1.0.0"
 
@@ -33,7 +33,7 @@ def get_physics_hash() -> str:
         return hashlib.md5(f.read()).hexdigest()[:8]
 
 
-COURT_H = 600.0
+COURT_H = 936.0
 PADDLE_W = 14.0
 PADDLE_H = 110.0
 PADDLE_INSET = 26.0

@@ -155,16 +155,11 @@ function updateParticles(dt) {
    Apply server frame
    ═══════════════════════════════════════════════════════════════════ */
 
-const COURT_W = 800;
-const COURT_H = 600;
-
 function applyFrame(f) {
-	const sx = W / COURT_W;
-	const sy = H / COURT_H;
-	ball.x   = f.ball_x * sx;
-	ball.y   = f.ball_y * sy;
-	paddle.y = f.paddle_left_y  * sy;
-	ai.y     = f.paddle_right_y * sy;
+	ball.x   = f.ball_x;
+	ball.y   = f.ball_y;
+	paddle.y = f.paddle_left_y;
+	ai.y     = f.paddle_right_y;
 	if (f.score_l !== score.L) { score.L = f.score_l; sL.textContent = score.L; }
 	if (f.score_r !== score.R) { score.R = f.score_r; sR.textContent = score.R; }
 	rally = f.rally;
