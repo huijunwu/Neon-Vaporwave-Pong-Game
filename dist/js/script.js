@@ -644,16 +644,10 @@ function drawParticles() {
    ═══════════════════════════════════════════════════════════════════ */
 
 let last = 0;
-let lastDraw = 0;
-const TARGET_FPS = 30;
-const FRAME_MIN_MS = 1000 / TARGET_FPS;
 
 function update(ts) {
 	requestAnimationFrame(update);
 	if (!W || !H) return;
-
-	if (ts - lastDraw < FRAME_MIN_MS) return;
-	lastDraw = ts;
 
 	const now = ts * 0.001;
 	let dt = now - last;
