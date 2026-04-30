@@ -1,52 +1,14 @@
 /* ═══════════════════════════════════════════════════════════════════
-   ONNX Worker — all inference runs off the main thread
+   WebSocket — game state from Python server
    ═══════════════════════════════════════════════════════════════════ */
 
-const worker = new Worker("./js/onnx-worker.mjs", { type: "module" });
-let _reqId = 0;
-const _pending = new Map();
+let pendingFrame = null;
 
-worker.onmessage = (e) => {
-	const { type, id, outputs, message } = e.data;
-	if (type === "ready") {
-		_pending.get("init")?.resolve();
-		_pending.delete("init");
-	}
-	if (type === "result") {
-		_pending.get(id)?.resolve(outputs);
-		_pending.delete(id);
-	}
-	if (type === "error") {
-		const p = _pending.get(id ?? "init");
-		if (p) {
-			p.reject(new Error(message));
-			_pending.delete(id ?? "init");
-		}
-	}
-};
-
-worker.onerror = (e) => {
-	console.error("ONNX Worker error:", e.message);
-};
-
-function workerInit() {
-	return new Promise((resolve, reject) => {
-		_pending.set("init", { resolve, reject });
-		worker.postMessage({
-			type: "init",
-			base: "/assets/onnx/",
-			models: ["step", "policy_nn"]
-		});
-	});
-}
-
-function workerRun(model, inputs) {
-	return new Promise((resolve, reject) => {
-		const id = _reqId++;
-		_pending.set(id, { resolve, reject });
-		worker.postMessage({ id, type: "run", model, inputs });
-	});
-}
+(function connectWs() {
+	const ws = new WebSocket("ws://localhost:8765");
+	ws.onmessage = (e) => { pendingFrame = JSON.parse(e.data); };
+	ws.onclose   = () => { setTimeout(connectWs, 1000); };
+})();
 
 /* ═══════════════════════════════════════════════════════════════════
    DOM references
@@ -101,9 +63,6 @@ let rally = 0;
 const paddle = { w: 14, h: 110, inset: 26, y: 0 };
 const ai = { w: 14, h: 110, inset: 26, y: 0 };
 const ball = { r: 10, x: 0, y: 0, vx: 0, vy: 0, speed: 560 };
-
-const ai_left = { memoryY: 0 };
-const ai_right = { memoryY: 0 };
 
 const trail = [];
 
@@ -193,54 +152,17 @@ function updateParticles(dt) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   ONNX wrapper functions — policy + step
+   Apply server frame
    ═══════════════════════════════════════════════════════════════════ */
 
-function buildObs(isLeft) {
-	const W2 = W, H2 = H, S = 560;
-	if (isLeft) {
-		return [ball.x / W2, ball.y / H2, ball.vx / S, ball.vy / S, paddle.y / H2, ai.y / H2];
-	} else {
-		return [(W2 - ball.x) / W2, ball.y / H2, -ball.vx / S, ball.vy / S, ai.y / H2, paddle.y / H2];
-	}
-}
-
-async function onnxPolicy(obs, memoryY) {
-	const r = await workerRun("policy_nn", {
-		obs: { data: Float32Array.from(obs), dims: [6] },
-		memory_y: memoryY,
-		rand_val: Math.random() * 2 - 1,
-		H
-	});
-	return { action: r.action, memoryY: r.new_memory_y };
-}
-
-async function onnxStep(actionL, actionR) {
-	const r = await workerRun("step", {
-		ball_x: ball.x, ball_y: ball.y, ball_vx: ball.vx, ball_vy: ball.vy,
-		paddle_left_y: paddle.y, paddle_right_y: ai.y,
-		score_left: score.L, score_right: score.R,
-		rally,
-		action_left: actionL, action_right: actionR,
-		rand_angle: Math.random(), rand_dir: Math.random(),
-		W, H
-	});
-	ball.x = r.new_ball_x;
-	ball.y = r.new_ball_y;
-	ball.vx = r.new_ball_vx;
-	ball.vy = r.new_ball_vy;
-	paddle.y = r.new_paddle_left_y;
-	ai.y = r.new_paddle_right_y;
-	score.L = r.new_score_left;
-	score.R = r.new_score_right;
-	rally = r.new_rally;
-	const ev = r.events.data;
-	return {
-		hitLeft: ev[0] > 0.5, hitRight: ev[1] > 0.5,
-		wallTop: ev[2] > 0.5, wallBottom: ev[3] > 0.5,
-		scoredL: ev[4] > 0.5, scoredR: ev[5] > 0.5,
-		gameOver: r.game_over > 0.5,
-	};
+function applyFrame(f) {
+	ball.x   = f.ball_x;
+	ball.y   = f.ball_y;
+	paddle.y = f.paddle_left_y;
+	ai.y     = f.paddle_right_y;
+	if (f.score_l !== score.L) { score.L = f.score_l; sL.textContent = score.L; }
+	if (f.score_r !== score.R) { score.R = f.score_r; sR.textContent = score.R; }
+	rally = f.rally;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -513,9 +435,6 @@ function resetGame() {
 	paddle.y = H / 2;
 	ai.y = H / 2;
 
-	ai_left.memoryY = H / 2;
-	ai_right.memoryY = H / 2;
-
 	trail.length = 0;
 	particleBuf.fill(0);
 	sparkBuf.fill(0);
@@ -719,12 +638,12 @@ function drawParticles() {
 
 
 /* ═══════════════════════════════════════════════════════════════════
-   Game loop (async — uses ONNX policy + step)
+   Game loop
    ═══════════════════════════════════════════════════════════════════ */
 
 let last = 0;
 
-async function update(ts) {
+function update(ts) {
 	requestAnimationFrame(update);
 	if (!W || !H) return;
 
@@ -740,33 +659,20 @@ async function update(ts) {
 
 	updateCutscene(dt);
 
-	if (!state.running) {
-		draw();
-		return;
-	}
-	if (state.paused) {
+	if (!state.running || state.paused) {
 		draw();
 		return;
 	}
 
-	// ── AI decisions for both paddles ← ONNX ──
-	const obsL = buildObs(true);
-	const obsR = buildObs(false);
-	const leftResult = await onnxPolicy(obsL, ai_left.memoryY);
-	const rightResult = await onnxPolicy(obsR, ai_right.memoryY);
-	ai_left.memoryY = leftResult.memoryY;
-	ai_right.memoryY = rightResult.memoryY;
+	if (!pendingFrame) {
+		draw();
+		return;
+	}
 
-	// ── Full game step ← ONNX (physics + scoring + auto-serve + game-over) ──
-	const prevScoreL = score.L;
-	const prevScoreR = score.R;
-	const events = await onnxStep(leftResult.action, rightResult.action);
+	const f      = pendingFrame;
+	pendingFrame = null;
+	applyFrame(f);
 
-	// ── Update DOM scores if changed ──
-	if (score.L !== prevScoreL) sL.textContent = score.L;
-	if (score.R !== prevScoreR) sR.textContent = score.R;
-
-	// ── Trail (JS — render only) ──
 	if (state.fx) {
 		trail.push({ x: ball.x, y: ball.y, t: state.time });
 		if (trail.length > PERF.maxTrail) trail.shift();
@@ -774,33 +680,33 @@ async function update(ts) {
 		trail.length = 0;
 	}
 
-	// ── Visual/audio effects from events ──
-	if (events.wallTop || events.wallBottom) {
+	const ev = f.events;
+
+	if (ev.wall_top || ev.wall_bottom) {
 		if (state.fx)
-			sparkLine(ball.x, ball.y, ball.vx * 0.03, events.wallTop ? 200 : -200, 6);
+			sparkLine(ball.x, ball.y, ball.vx * 0.03, ev.wall_top ? 200 : -200, 6);
 		beep("wall");
 	}
 
-	if (events.hitLeft || events.hitRight) {
+	if (ev.hit_left || ev.hit_right) {
 		if (state.fx) {
 			burst(ball.x, ball.y, 6);
-			sparkLine(ball.x, ball.y, events.hitLeft ? 220 : -220, ball.vy * 0.05, 6);
+			sparkLine(ball.x, ball.y, ev.hit_left ? 220 : -220, ball.vy * 0.05, 6);
 			shock(4);
 		}
 		beep("hit");
 	}
 
-	if (events.scoredL || events.scoredR) {
+	if (ev.scored_l || ev.scored_r) {
 		if (state.fx) { burst(W / 2, H / 2, 10); shock(6); }
 		beep("score");
 		maybeMatchPointCutscene();
 	}
 
-	if (events.gameOver) {
+	if (f.game_over) {
 		endGame(score.L > score.R);
 	}
 
-	// ── Particles — native JS ──
 	if (state.fx) {
 		updateParticles(dt);
 	}
@@ -809,30 +715,19 @@ async function update(ts) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   Init — load ONNX, then start
+   Init
    ═══════════════════════════════════════════════════════════════════ */
 
-async function init() {
+function init() {
 	resize();
 	paddle.y = H / 2;
-	ai.y = H / 2;
-
-	ai_left.memoryY = H / 2;
-	ai_right.memoryY = H / 2;
+	ai.y     = H / 2;
 
 	setSoundIcon();
 	setFXIcon();
 	setPauseIcon();
 
-	overlayImg.src = INTRO_IMG;
-	setIntro(true);
-	overlay.classList.remove("hidden");
-	if (playText) playText.textContent = "LOADING…";
-
-	await workerInit();
-
-	if (playText) playText.textContent = "START";
-
+	start();
 	requestAnimationFrame(update);
 }
 
