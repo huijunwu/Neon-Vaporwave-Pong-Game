@@ -485,6 +485,8 @@ function endGame(playerWon) {
 
 	if (playText) playText.textContent = "PLAY AGAIN";
 	beep("win");
+
+	setTimeout(start, 3000);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
