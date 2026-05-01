@@ -1,10 +1,3 @@
-"""
-PongStepModule — Pong environment as nn.Module.
-
-  forward() → exported to ONNX as pong_step.onnx (JS calls this)
-  reset/step/reset_done → Python-only (RL training)
-"""
-
 from __future__ import annotations
 
 from typing import NamedTuple
@@ -14,7 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from codepong26.physics import (
-    COURT_W, COURT_H, BALL_BASE_SPEED,
+    COURT_W, COURT_H, BALL_BASE_SPEED, PADDLE_SPEED,
     full_step, serve_ball_from_seed,
 )
 from codepong26.functional import Timestep, split_seed, manual_uniform
@@ -27,6 +20,8 @@ class PongState(NamedTuple):
     ball_vy: Tensor
     paddle_left_y: Tensor
     paddle_right_y: Tensor
+    paddle_left_vy: Tensor
+    paddle_right_vy: Tensor
     score_left: Tensor
     score_right: Tensor
     rally: Tensor
@@ -36,38 +31,52 @@ class PongState(NamedTuple):
 
 def _get_obs(state: PongState) -> Tensor:
     device = state.ball_x.device
-    court_w = torch.tensor(COURT_W, device=device)
-    court_h = torch.tensor(COURT_H, device=device)
+    court_w    = torch.tensor(COURT_W,        device=device)
+    court_h    = torch.tensor(COURT_H,        device=device)
     ball_speed = torch.tensor(BALL_BASE_SPEED, device=device)
+    pad_speed  = torch.tensor(PADDLE_SPEED,   device=device)
+
     shared = torch.stack([
-        state.ball_x / court_w,
-        state.ball_y / court_h,
+        state.ball_x  / court_w,
+        state.ball_y  / court_h,
         state.ball_vx / ball_speed,
         state.ball_vy / ball_speed,
     ])
     shared_mirrored = torch.stack([
         (court_w - state.ball_x) / court_w,
-        state.ball_y / court_h,
+        state.ball_y  / court_h,
         -state.ball_vx / ball_speed,
-        state.ball_vy / ball_speed,
+        state.ball_vy  / ball_speed,
     ])
-    court_h_tensor = torch.tensor(COURT_H, device=device)
+
     left_obs = torch.cat([shared, torch.stack([
-        state.paddle_left_y / court_h_tensor,
-        state.paddle_right_y / court_h_tensor,
+        state.paddle_left_y  / court_h,
+        state.paddle_right_y / court_h,
+        state.paddle_left_vy  / pad_speed,
+        state.paddle_right_vy / pad_speed,
     ])])
     right_obs = torch.cat([shared_mirrored, torch.stack([
-        state.paddle_right_y / court_h_tensor,
-        state.paddle_left_y / court_h_tensor,
+        state.paddle_right_y / court_h,
+        state.paddle_left_y  / court_h,
+        state.paddle_right_vy / pad_speed,
+        state.paddle_left_vy  / pad_speed,
     ])])
     return torch.stack([left_obs, right_obs])
 
 
 class PongStepModule(nn.Module):
 
-    n_agents = 2
-    obs_dim = 6
+    n_agents   = 2
+    obs_dim    = 8
     action_dim = 1
+
+    EV_HIT_LEFT      = 0
+    EV_HIT_RIGHT     = 1
+    EV_WALL_TOP      = 2
+    EV_WALL_BOTTOM   = 3
+    EV_SCORED_LEFT   = 4
+    EV_SCORED_RIGHT  = 5
+    EV_CROSSED_CENTER = 6
 
     def forward(self, ball_x, ball_y, ball_vx, ball_vy,
                 paddle_left_y, paddle_right_y,
@@ -76,7 +85,6 @@ class PongStepModule(nn.Module):
                 action_left, action_right,
                 rand_angle, rand_dir,
                 W, H):
-        """ONNX-exported: full game step with flat scalar interface."""
         return full_step(
             ball_x, ball_y, ball_vx, ball_vy,
             paddle_left_y, paddle_right_y,
@@ -91,21 +99,17 @@ class PongStepModule(nn.Module):
         device = seed.device
         s1, s2 = split_seed(seed, 2)
         bx, by, bvx, bvy, s_next = serve_ball_from_seed(s1, COURT_W, COURT_H)
-        bx = bx.to(device)
-        by = by.to(device)
-        bvx = bvx.to(device)
-        bvy = bvy.to(device)
-        s_next = s_next.to(device)
-
+        zero = torch.tensor(0.0, device=device)
         state = PongState(
-            ball_x=bx, ball_y=by, ball_vx=bvx, ball_vy=bvy,
+            ball_x=bx.to(device), ball_y=by.to(device),
+            ball_vx=bvx.to(device), ball_vy=bvy.to(device),
             paddle_left_y=torch.tensor(COURT_H / 2.0, device=device),
             paddle_right_y=torch.tensor(COURT_H / 2.0, device=device),
-            score_left=torch.tensor(0.0, device=device),
-            score_right=torch.tensor(0.0, device=device),
-            rally=torch.tensor(0.0, device=device),
-            step_count=torch.tensor(0.0, device=device),
-            seed=s_next,
+            paddle_left_vy=zero,
+            paddle_right_vy=zero,
+            score_left=zero, score_right=zero,
+            rally=zero, step_count=zero,
+            seed=s_next.to(device),
         )
         return state, Timestep(
             obs=_get_obs(state),
@@ -116,14 +120,14 @@ class PongStepModule(nn.Module):
         )
 
     def step(self, state: PongState, actions: Tensor) -> tuple[PongState, Timestep]:
-        """Python-only: structured step for RL training."""
         device = state.ball_x.device
         s1, s2, s_next = split_seed(state.seed, 3)
         rand_angle = manual_uniform(s1)
-        rand_dir = manual_uniform(s2)
+        rand_dir   = manual_uniform(s2)
 
         (bx, by, bvx, bvy,
-         new_left_y, new_right_y,
+         new_left_y,  new_right_y,
+         new_left_vy, new_right_vy,
          new_score_left, new_score_right,
          new_rally,
          events, game_over) = self.forward(
@@ -137,24 +141,25 @@ class PongStepModule(nn.Module):
         )
 
         scored_any = (events[4] > 0.5) | (events[5] > 0.5)
-        new_seed = torch.where(scored_any, s_next, state.seed)
+        new_seed   = torch.where(scored_any, s_next, state.seed)
 
         new_state = PongState(
             ball_x=bx, ball_y=by, ball_vx=bvx, ball_vy=bvy,
-            paddle_left_y=new_left_y, paddle_right_y=new_right_y,
-            score_left=new_score_left, score_right=new_score_right,
+            paddle_left_y=new_left_y,   paddle_right_y=new_right_y,
+            paddle_left_vy=new_left_vy, paddle_right_vy=new_right_vy,
+            score_left=new_score_left,  score_right=new_score_right,
             rally=new_rally,
             step_count=state.step_count + 1.0,
             seed=new_seed,
         )
 
-        scored_left = events[4] > 0.5
+        scored_left  = events[4] > 0.5
         scored_right = events[5] > 0.5
 
         return new_state, Timestep(
             obs=_get_obs(new_state),
             reward=torch.stack([
-                scored_left.float() - scored_right.float(),
+                scored_left.float()  - scored_right.float(),
                 scored_right.float() - scored_left.float(),
             ]),
             done=torch.stack([game_over > 0.5, game_over > 0.5]),

@@ -126,12 +126,13 @@ def score_detect(bx: Tensor, w: float = COURT_W) -> tuple[Tensor, Tensor]:
 
 
 def apply_action(paddle_y: Tensor, target_y_norm: Tensor,
-                 court_h: _Scalar = COURT_H, dt: _Scalar = DT) -> Tensor:
+                 court_h: _Scalar = COURT_H, dt: _Scalar = DT) -> tuple[Tensor, Tensor]:
     target_y = target_y_norm * court_h
     target_y = torch.clamp(target_y, PADDLE_H / 2.0, court_h - PADDLE_H / 2.0)
     ease = 1.0 - 0.0009 ** dt
-    new_y = paddle_y + (target_y - paddle_y) * ease
-    return torch.clamp(new_y, PADDLE_H / 2.0, court_h - PADDLE_H / 2.0)
+    new_y = torch.clamp(paddle_y + (target_y - paddle_y) * ease, PADDLE_H / 2.0, court_h - PADDLE_H / 2.0)
+    vy = (new_y - paddle_y) / dt
+    return new_y, vy
 
 
 def ai_track(ball_y: Tensor, ball_vy: Tensor,
@@ -193,19 +194,8 @@ def full_step(ball_x: Tensor, ball_y: Tensor, ball_vx: Tensor, ball_vy: Tensor,
               rand_angle: Tensor, rand_dir: Tensor,
               court_w: _Scalar = COURT_W, court_h: _Scalar = COURT_H,
               ) -> tuple:
-    """Complete game step: physics + scoring + auto-serve + game-over.
-
-    rand_angle, rand_dir: uniform [0,1) from caller (JS or RL seed-based).
-    Used for serve direction when a point is scored.
-
-    Returns: (new_ball_x, new_ball_y, new_ball_vx, new_ball_vy,
-              new_paddle_left_y, new_paddle_right_y,
-              new_score_left, new_score_right,
-              new_rally,
-              events[6], game_over)
-    """
-    new_left_y = apply_action(paddle_left_y, action_left, court_h=court_h)
-    new_right_y = apply_action(paddle_right_y, action_right, court_h=court_h)
+    new_left_y,  new_left_vy  = apply_action(paddle_left_y,  action_left,  court_h=court_h)
+    new_right_y, new_right_vy = apply_action(paddle_right_y, action_right, court_h=court_h)
 
     bx, by = ball_move(ball_x, ball_y, ball_vx, ball_vy)
     bvx = ball_vx
@@ -223,30 +213,34 @@ def full_step(ball_x: Tensor, ball_y: Tensor, ball_vx: Tensor, ball_vy: Tensor,
     scored_left, scored_right = score_detect(bx, w=court_w)
     scored_any = scored_left | scored_right
 
-    new_score_left = score_left + scored_left.float()
+    new_score_left  = score_left  + scored_left.float()
     new_score_right = score_right + scored_right.float()
 
-    # Auto-serve on score
     serve_bx, serve_by, serve_bvx, serve_bvy = serve_ball_from_rand(
         rand_angle, rand_dir, court_w, court_h,
     )
     device = bx.device
-    bx = torch.where(scored_any, serve_bx, bx)
-    by = torch.where(scored_any, serve_by, by)
-    bvx = torch.where(scored_any, serve_bvx, bvx)
-    bvy = torch.where(scored_any, serve_bvy, bvy)
+    bx   = torch.where(scored_any, serve_bx,   bx)
+    by   = torch.where(scored_any, serve_by,   by)
+    bvx  = torch.where(scored_any, serve_bvx,  bvx)
+    bvy  = torch.where(scored_any, serve_bvy,  bvy)
     new_rally = torch.where(scored_any, torch.tensor(0.0, device=device), new_rally)
 
     game_over = (new_score_left >= MAX_SCORE) | (new_score_right >= MAX_SCORE)
+
+    mid = court_w / 2.0 if not isinstance(court_w, Tensor) else court_w / 2.0
+    crossed_center = ((ball_x - mid) * (bx - mid)) <= 0.0
 
     events = torch.stack([
         hit_left.float(), hit_right.float(),
         hit_top.float(), hit_bottom.float(),
         scored_left.float(), scored_right.float(),
+        crossed_center.float(),
     ])
 
     return (bx, by, bvx, bvy,
-            new_left_y, new_right_y,
+            new_left_y,  new_right_y,
+            new_left_vy, new_right_vy,
             new_score_left, new_score_right,
             new_rally,
             events, game_over.float())
