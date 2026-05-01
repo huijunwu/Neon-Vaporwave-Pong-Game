@@ -228,8 +228,7 @@ def full_step(ball_x: Tensor, ball_y: Tensor, ball_vx: Tensor, ball_vy: Tensor,
 
     game_over = (new_score_left >= MAX_SCORE) | (new_score_right >= MAX_SCORE)
 
-    mid = court_w / 2.0 if not isinstance(court_w, Tensor) else court_w / 2.0
-    crossed_center = ((ball_x - mid) * (bx - mid)) <= 0.0
+    crossed_center = ((ball_x - court_w / 2.0) * (bx - court_w / 2.0)) <= 0.0
 
     events = torch.stack([
         hit_left.float(), hit_right.float(),
