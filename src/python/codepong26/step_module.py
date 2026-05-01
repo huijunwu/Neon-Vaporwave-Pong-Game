@@ -66,17 +66,18 @@ def _get_obs(state: PongState) -> Tensor:
 
 class PongStepModule(nn.Module):
 
-    n_agents   = 2
-    obs_dim    = 8
-    action_dim = 1
+    n_agents     = 2
+    obs_dim      = 8
+    action_dim   = 1
+    n_dividers   = 5
 
-    EV_HIT_LEFT      = 0
-    EV_HIT_RIGHT     = 1
-    EV_WALL_TOP      = 2
-    EV_WALL_BOTTOM   = 3
-    EV_SCORED_LEFT   = 4
-    EV_SCORED_RIGHT  = 5
-    EV_CROSSED_CENTER = 6
+    EV_HIT_LEFT       = 0
+    EV_HIT_RIGHT      = 1
+    EV_WALL_TOP       = 2
+    EV_WALL_BOTTOM    = 3
+    EV_SCORED_LEFT    = 4
+    EV_SCORED_RIGHT   = 5
+    EV_CROSSED_ZONE   = 6
 
     def forward(self, ball_x, ball_y, ball_vx, ball_vy,
                 paddle_left_y, paddle_right_y,
@@ -139,6 +140,16 @@ class PongStepModule(nn.Module):
             rand_angle, rand_dir,
             torch.tensor(COURT_W, device=device), torch.tensor(COURT_H, device=device),
         )
+
+        crossed_zone = torch.zeros((), dtype=torch.bool, device=device)
+        for k in range(1, self.n_dividers + 1):
+            divider = COURT_W * k / (self.n_dividers + 1)
+            crossed_zone = crossed_zone | (((state.ball_x - divider) * (bx - divider)) <= 0.0)
+
+        events = torch.stack([
+            events[0], events[1], events[2], events[3], events[4], events[5],
+            crossed_zone.float(),
+        ])
 
         scored_any = (events[4] > 0.5) | (events[5] > 0.5)
         new_seed   = torch.where(scored_any, s_next, state.seed)
