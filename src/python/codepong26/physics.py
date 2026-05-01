@@ -125,16 +125,13 @@ def score_detect(bx: Tensor, w: float = COURT_W) -> tuple[Tensor, Tensor]:
     return scored_left, scored_right
 
 
-def apply_action(paddle_y: Tensor, action: Tensor,
+def apply_action(paddle_y: Tensor, target_y_norm: Tensor,
                  court_h: _Scalar = COURT_H, dt: _Scalar = DT) -> Tensor:
-    # action: float32 — 0.0=NOOP, 1.0=DOWN(Y+), 2.0=UP(Y-) (rounded internally)
-    a = torch.round(action)
-    move = (a == 1).float() - (a == 2).float()
-    return torch.clamp(
-        paddle_y + move * PADDLE_SPEED * dt,
-        PADDLE_H / 2.0,
-        court_h - PADDLE_H / 2.0,
-    )
+    target_y = target_y_norm * court_h
+    target_y = torch.clamp(target_y, PADDLE_H / 2.0, court_h - PADDLE_H / 2.0)
+    ease = 1.0 - 0.0009 ** dt
+    new_y = paddle_y + (target_y - paddle_y) * ease
+    return torch.clamp(new_y, PADDLE_H / 2.0, court_h - PADDLE_H / 2.0)
 
 
 def ai_track(ball_y: Tensor, ball_vy: Tensor,

@@ -67,7 +67,7 @@ class PongStepModule(nn.Module):
 
     n_agents = 2
     obs_dim = 6
-    n_actions = 3
+    action_dim = 1
 
     def forward(self, ball_x, ball_y, ball_vx, ball_vy,
                 paddle_left_y, paddle_right_y,
