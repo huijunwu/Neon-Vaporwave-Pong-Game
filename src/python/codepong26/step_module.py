@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import NamedTuple
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
 from codepong26.physics import (
@@ -31,10 +30,10 @@ class PongState(NamedTuple):
 
 def _get_obs(state: PongState) -> Tensor:
     device = state.ball_x.device
-    court_w    = torch.tensor(COURT_W,        device=device)
-    court_h    = torch.tensor(COURT_H,        device=device)
+    court_w    = torch.tensor(COURT_W,         device=device)
+    court_h    = torch.tensor(COURT_H,         device=device)
     ball_speed = torch.tensor(BALL_BASE_SPEED, device=device)
-    pad_speed  = torch.tensor(PADDLE_SPEED,   device=device)
+    pad_speed  = torch.tensor(PADDLE_SPEED,    device=device)
 
     shared = torch.stack([
         state.ball_x  / court_w,
@@ -64,41 +63,24 @@ def _get_obs(state: PongState) -> Tensor:
     return torch.stack([left_obs, right_obs])
 
 
-class PongStepModule(nn.Module):
+class PongStepModule:
 
     n_agents     = 2
     obs_dim      = 8
     action_dim   = 1
     n_dividers   = 5
 
-    EV_HIT_LEFT       = 0
-    EV_HIT_RIGHT      = 1
-    EV_WALL_TOP       = 2
-    EV_WALL_BOTTOM    = 3
-    EV_SCORED_LEFT    = 4
-    EV_SCORED_RIGHT   = 5
-    EV_CROSSED_ZONE   = 6
-
-    def forward(self, ball_x, ball_y, ball_vx, ball_vy,
-                paddle_left_y, paddle_right_y,
-                score_left, score_right,
-                rally,
-                action_left, action_right,
-                rand_angle, rand_dir,
-                W, H):
-        return full_step(
-            ball_x, ball_y, ball_vx, ball_vy,
-            paddle_left_y, paddle_right_y,
-            score_left, score_right,
-            rally,
-            action_left, action_right,
-            rand_angle, rand_dir,
-            court_w=W, court_h=H,
-        )
+    EV_HIT_LEFT     = 0
+    EV_HIT_RIGHT    = 1
+    EV_WALL_TOP     = 2
+    EV_WALL_BOTTOM  = 3
+    EV_SCORED_LEFT  = 4
+    EV_SCORED_RIGHT = 5
+    EV_CROSSED_ZONE = 6
 
     def reset(self, seed: Tensor) -> tuple[PongState, Timestep]:
         device = seed.device
-        s1, s2 = split_seed(seed, 2)
+        s1, _  = split_seed(seed, 2)
         bx, by, bvx, bvy, s_next = serve_ball_from_seed(s1, COURT_W, COURT_H)
         zero = torch.tensor(0.0, device=device)
         state = PongState(
@@ -131,14 +113,15 @@ class PongStepModule(nn.Module):
          new_left_vy, new_right_vy,
          new_score_left, new_score_right,
          new_rally,
-         events, game_over) = self.forward(
+         events, game_over) = full_step(
             state.ball_x, state.ball_y, state.ball_vx, state.ball_vy,
             state.paddle_left_y, state.paddle_right_y,
             state.score_left, state.score_right,
             state.rally,
             actions[0], actions[1],
             rand_angle, rand_dir,
-            torch.tensor(COURT_W, device=device), torch.tensor(COURT_H, device=device),
+            court_w=torch.tensor(COURT_W, device=device),
+            court_h=torch.tensor(COURT_H, device=device),
         )
 
         crossed_zone = torch.zeros((), dtype=torch.bool, device=device)
